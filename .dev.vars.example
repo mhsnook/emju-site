@@ -1,0 +1,11 @@
+# Local development secrets for the Cloudflare Worker (loaded by `vite dev`).
+# Copy to `.dev.vars` and fill in. `.dev.vars` is gitignored.
+#
+# Everything here is OPTIONAL for local dev. The D1 binding (DB) and email
+# binding (SEND_EMAIL) come from wrangler.jsonc and run against local emulation;
+# Turnstile uses Cloudflare's always-pass test keys when these are unset.
+
+# Cloudflare Turnstile (https://dash.cloudflare.com -> Turnstile).
+# Leave unset to use the always-pass test keys in development.
+# TURNSTILE_SITE_KEY="0x..."
+# TURNSTILE_SECRET_KEY="0x..."

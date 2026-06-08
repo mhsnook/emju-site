@@ -1,0 +1,81 @@
+{
+	"name": "emju-site",
+	"private": true,
+	"type": "module",
+	"packageManager": "pnpm@11.1.2",
+	"imports": {
+		"#/*": "./src/*"
+	},
+	"scripts": {
+		"dev": "vite dev --port 3000",
+		"generate-routes": "tsr generate",
+		"build": "vite build",
+		"preview": "vite preview",
+		"start": "vite dev --port 3000",
+		"test": "vitest run",
+		"test:watch": "vitest",
+		"scene": "scenetest",
+		"scene:headed": "scenetest --headed",
+		"lint": "oxlint",
+		"format": "oxfmt",
+		"format:check": "oxfmt --check",
+		"typecheck": "tsc --noEmit",
+		"cf-types": "wrangler types",
+		"postinstall": "wrangler types",
+		"db:generate": "drizzle-kit generate",
+		"db:migrate": "wrangler d1 migrations apply emju-db --local",
+		"db:migrate:prod": "wrangler d1 migrations apply emju-db --remote",
+		"deploy": "pnpm run build && wrangler deploy"
+	},
+	"dependencies": {
+		"@cloudflare/vite-plugin": "^1.40.0",
+		"@fontsource-variable/atkinson-hyperlegible-next": "^5.2.6",
+		"@fontsource/instrument-sans": "^5.2.8",
+		"@fontsource/instrument-serif": "^5.2.8",
+		"@marsidev/react-turnstile": "^1.5.2",
+		"@tailwindcss/vite": "^4.3.0",
+		"@tanstack/react-router": "latest",
+		"@tanstack/react-router-ssr-query": "latest",
+		"@tanstack/react-start": "latest",
+		"@tanstack/router-plugin": "^1.132.0",
+		"drizzle-orm": "^0.45.2",
+		"lucide-react": "^0.545.0",
+		"mimetext": "^3.0.28",
+		"react": "^19.2.0",
+		"react-dom": "^19.2.0",
+		"tailwindcss": "^4.3.0"
+	},
+	"devDependencies": {
+		"@scenetest/checks-react": "^0.10.0",
+		"@scenetest/scenes": "^0.10.0",
+		"@scenetest/vite-plugin": "^0.10.0",
+		"@tailwindcss/typography": "^0.5.16",
+		"@tanstack/router-cli": "^1.132.0",
+		"@testing-library/dom": "^10.4.1",
+		"@testing-library/react": "^16.3.0",
+		"@types/node": "^22.10.2",
+		"@types/react": "^19.2.0",
+		"@types/react-dom": "^19.2.0",
+		"@vitejs/plugin-react": "^6.0.1",
+		"daisyui": "^5.5.23",
+		"drizzle-kit": "^0.31.10",
+		"jsdom": "^28.1.0",
+		"oxfmt": "^0.53.0",
+		"oxlint": "^1.68.0",
+		"typescript": "^6.0.2",
+		"vite": "^8.0.0",
+		"vitest": "^4.1.5",
+		"wrangler": "^4.70.0"
+	},
+	"optionalDependencies": {
+		"playwright": "1.56.1",
+		"playwright-core": "1.56.1"
+	},
+	"pnpm": {
+		"overrides": {
+			"playwright": "1.56.1",
+			"playwright-core": "1.56.1",
+			"@playwright/test": "1.56.1"
+		}
+	}
+}

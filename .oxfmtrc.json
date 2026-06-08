@@ -1,0 +1,21 @@
+{
+	"$schema": "./node_modules/oxfmt/configuration_schema.json",
+	"useTabs": true,
+	"tabWidth": 3,
+	"semi": false,
+	"singleQuote": true,
+	"trailingComma": "es5",
+	"sortImports": true,
+	"sortTailwindcss": true,
+	"ignorePatterns": [
+		"**/node_modules/**",
+		"dist/**",
+		".output/**",
+		".wrangler/**",
+		"pnpm-lock.yaml",
+		"worker-configuration.d.ts",
+		"src/routeTree.gen.ts",
+		"drizzle/**",
+		"scenetest/.reports/**"
+	]
+}

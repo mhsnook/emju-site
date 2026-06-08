@@ -1,0 +1,33 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "emju-site",
+	"compatibility_date": "2025-09-02",
+	"compatibility_flags": ["nodejs_compat"],
+	"main": "@tanstack/react-start/server-entry",
+	// Non-secret, public configuration. Secrets (TURNSTILE_SECRET_KEY) are set
+	// with `wrangler secret put`. CONTACT_FROM_EMAIL must be an address on a
+	// domain you've enabled for Email Routing.
+	"vars": {
+		"CONTACT_NOTIFY_EMAIL": "hello@emju.in",
+		"CONTACT_FROM_EMAIL": "noreply@emju.in",
+		// "TURNSTILE_SITE_KEY": "<your production site key>"
+	},
+	// D1 (native serverless SQLite). Create with `wrangler d1 create emju-db`
+	// and paste the returned database_id below. Migrations live in ./drizzle.
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "emju-db",
+			"database_id": "10bf53e1-0ad7-464b-9034-4f4cec06f004",
+			"migrations_dir": "drizzle",
+		},
+	],
+	// Outbound email via Cloudflare Email Routing. `destination_address` must be
+	// a verified destination in your Email Routing setup (keep it == CONTACT_NOTIFY_EMAIL).
+	"send_email": [
+		{
+			"name": "SEND_EMAIL",
+			"destination_address": "hello@emju.in",
+		},
+	],
+}
