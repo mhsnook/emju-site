@@ -144,7 +144,7 @@ export const potentials: Array<Potential> = [
 	{
 		name: 'Product/team roadmapping',
 		tag: 'team support',
-		body: ``,
+		body: `Writing a roadmap for the team feels great until you step back and realize you’re not just 20% over-stretched, you’re going to have to change your level, and you need work plans that help you make this happen.`,
 	},
 ]
 
@@ -157,5 +157,6 @@ export const nav = [
 	{ label: 'Services', href: '/#services' },
 	{ label: 'Approach', href: '/#approach' },
 	{ label: 'Projects', href: '/#projects' },
+	{ label: 'Project Ideas', href: '/#potentials' },
 	{ label: 'Contact', href: '/contact' },
 ] as const
