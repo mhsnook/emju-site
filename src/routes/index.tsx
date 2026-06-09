@@ -1,6 +1,7 @@
 import { should } from '@scenetest/checks-react'
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { Code2, Network, LayoutDashboard, Users, ArrowRight, ExternalLink } from 'lucide-react'
+import { useState } from 'react'
 
 import {
 	hero,
@@ -30,7 +31,7 @@ function Home() {
 			<Services />
 			<Approach />
 			<Projects />
-			{/* <Potentials /> */}
+			<Potentials />
 			<ContactCta />
 		</>
 	)
@@ -108,12 +109,6 @@ function Approach() {
 						</div>
 					))}
 				</div>
-				<p className="my-6 font-bold">Some things we could build...</p>
-				<ul className="text-base-content/70 ms-4 grid list-disc space-y-4 sm:grid-cols-2 md:grid-cols-3">
-					{potentials.map((item) => (
-						<li key={item.name}>{item.name}</li>
-					))}
-				</ul>
 			</div>
 		</section>
 	)
@@ -167,28 +162,72 @@ function Projects() {
 }
 
 function Potentials() {
+	const [active, setActive] = useState(0)
+	const current = potentials[active]
+
+	function onKeyDown(e: React.KeyboardEvent<HTMLUListElement>) {
+		if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+		e.preventDefault()
+		const dir = e.key === 'ArrowDown' ? 1 : -1
+		setActive((active + dir + potentials.length) % potentials.length)
+	}
+
 	return (
 		<section
 			id="potentials"
 			data-testid="potentials"
-			className="mx-auto max-w-5xl scroll-mt-20 px-5 py-10"
+			className="mx-auto max-w-5xl scroll-mt-20 px-5 py-16"
 		>
-			<SectionHeading eyebrow="Project Ideas" title="What if we tried..." />
-			<div className="mt-10 grid gap-2 sm:grid-cols-2">
-				{potentials.map((project) => (
-					<article
-						key={project.name}
-						data-testid="potentials-card"
-						data-key={project.name}
-						className="rounded-box bg-base-100 hover:border-primary/60 border border-transparent p-4"
-					>
-						<span className="badge badge-outline badge-neutral bg-neutral/10 font-ui -mt-1 mb-1 text-xs">
-							{project.tag}
-						</span>
-						<h3 className="font-display text-base-content/80 text-xl">{project.name}</h3>
-						<p className="text-base-content/70 mt-3 leading-relaxed">{project.body}</p>
-					</article>
-				))}
+			<SectionHeading
+				eyebrow="Project ideas · hover or arrow-key the list"
+				title="What if we tried..."
+			/>
+			<div className="mt-10 grid items-start gap-8 md:grid-cols-2">
+				<ul
+					role="listbox"
+					tabIndex={0}
+					aria-label="Project ideas"
+					aria-activedescendant={`potential-${active}`}
+					onKeyDown={onKeyDown}
+					data-testid="potentials-list"
+					className="focus-visible:ring-primary/40 flex flex-col rounded focus:outline-none focus-visible:ring-2"
+				>
+					{potentials.map((item, i) => {
+						const selected = i === active
+						return (
+							<li
+								key={item.name}
+								id={`potential-${i}`}
+								role="option"
+								aria-selected={selected}
+								data-testid="potentials-item"
+								data-key={item.name}
+								onMouseEnter={() => setActive(i)}
+								className={`font-display flex cursor-pointer items-baseline gap-3 border-l-2 py-2.5 pl-4 text-2xl leading-tight transition-colors ${selected ? 'border-primary text-base-content' : 'border-base-300 text-base-content/40 hover:text-base-content/70'}`}
+							>
+								<span className="font-ui text-base-content/40 pt-1 text-sm tabular-nums">
+									{String(i + 1).padStart(2, '0')}
+								</span>
+								<span>{item.name}</span>
+							</li>
+						)
+					})}
+				</ul>
+
+				<div
+					data-testid="potentials-detail"
+					className="rounded-box border-base-300 bg-base-200 border p-8"
+				>
+					<span className="badge badge-outline badge-neutral bg-neutral/10 font-ui text-xs">
+						{current.tag}
+					</span>
+					<h3 className="font-display text-base-content mt-4 text-3xl leading-tight">
+						{current.name}
+					</h3>
+					{current.body ? (
+						<p className="text-base-content/70 mt-4 leading-relaxed">{current.body}</p>
+					) : null}
+				</div>
 			</div>
 		</section>
 	)
