@@ -45,7 +45,7 @@ Bindings and non-secret vars are in [`wrangler.jsonc`](wrangler.jsonc); secrets 
 | --------------------------------------------- | ------------ | -------------------------------------------------------------------- |
 | `DB`                                          | binding      | D1 database (contact submissions)                                    |
 | `SEND_EMAIL`                                  | binding      | Email Routing send binding                                           |
-| `CONTACT_NOTIFY_EMAIL`                        | var          | Inbox that receives enquiries (a verified Email Routing destination) |
+| `CONTACT_NOTIFY_EMAIL`                        | secret       | Inbox that receives enquiries (a verified Email Routing destination) |
 | `CONTACT_FROM_EMAIL`                          | var          | "From" address — must be on an Email-Routing-enabled domain          |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | var / secret | Turnstile keys (fall back to test keys)                              |
 

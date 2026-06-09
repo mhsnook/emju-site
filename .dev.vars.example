@@ -9,3 +9,7 @@
 # Leave unset to use the always-pass test keys in development.
 # TURNSTILE_SITE_KEY="0x..."
 # TURNSTILE_SECRET_KEY="0x..."
+
+# Where contact-form notifications are sent (a verified Email Routing
+# destination). In production set it with `wrangler secret put CONTACT_NOTIFY_EMAIL`.
+# CONTACT_NOTIFY_EMAIL="you@example.com"

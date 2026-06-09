@@ -162,7 +162,6 @@ function Projects() {
 					</article>
 				))}
 			</div>
-			<p>asdasda</p>
 		</section>
 	)
 }

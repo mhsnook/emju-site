@@ -4,11 +4,10 @@
 	"compatibility_date": "2025-09-02",
 	"compatibility_flags": ["nodejs_compat"],
 	"main": "@tanstack/react-start/server-entry",
-	// Non-secret, public configuration. Secrets (TURNSTILE_SECRET_KEY) are set
+	// Non-secret, public configuration. Secrets (TURNSTILE_SECRET_KEY, CONTACT_NOTIFY_EMAIL) are set
 	// with `wrangler secret put`. CONTACT_FROM_EMAIL must be an address on a
 	// domain you've enabled for Email Routing.
 	"vars": {
-		"CONTACT_NOTIFY_EMAIL": "hello@emju.in",
 		"CONTACT_FROM_EMAIL": "noreply@emju.in",
 		// "TURNSTILE_SITE_KEY": "<your production site key>"
 	},
@@ -22,12 +21,11 @@
 			"migrations_dir": "drizzle",
 		},
 	],
-	// Outbound email via Cloudflare Email Routing. `destination_address` must be
-	// a verified destination in your Email Routing setup (keep it == CONTACT_NOTIFY_EMAIL).
+	// Outbound email via Cloudflare Email Routing. Sends to any verified
+	// destination address; the recipient is the CONTACT_NOTIFY_EMAIL secret.
 	"send_email": [
 		{
 			"name": "SEND_EMAIL",
-			"destination_address": "hello@emju.in",
 		},
 	],
 }
