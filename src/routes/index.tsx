@@ -3,17 +3,13 @@ import { createFileRoute, Link } from '@tanstack/react-router'
 import { Code2, Network, LayoutDashboard, Users, ArrowRight, ExternalLink } from 'lucide-react'
 import { useState } from 'react'
 
-import {
-	hero,
-	services,
-	approach,
-	projects,
-	potentials,
-	contact,
-	type Service,
-} from '../content/site'
+import { hero, services, approach, projects, contact, type Potential, type Service } from '../content/site'
+import { getProjectIdeas } from '../server/content'
 
-export const Route = createFileRoute('/')({ component: Home })
+export const Route = createFileRoute('/')({
+	loader: () => getProjectIdeas(),
+	component: Home,
+})
 
 const icons = {
 	Code2,
@@ -24,6 +20,7 @@ const icons = {
 
 function Home() {
 	should('home should render all services', services.length === 4)
+	const ideas = Route.useLoaderData()
 
 	return (
 		<>
@@ -31,7 +28,7 @@ function Home() {
 			<Services />
 			<Approach />
 			<Projects />
-			<Potentials />
+			<Potentials ideas={ideas} />
 			<ContactCta />
 		</>
 	)
@@ -161,15 +158,15 @@ function Projects() {
 	)
 }
 
-function Potentials() {
+function Potentials({ ideas }: { ideas: Array<Potential> }) {
 	const [active, setActive] = useState(0)
-	const current = potentials[active]
+	const current = ideas[active]
 
 	function onKeyDown(e: React.KeyboardEvent<HTMLUListElement>) {
 		if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
 		e.preventDefault()
 		const dir = e.key === 'ArrowDown' ? 1 : -1
-		setActive((active + dir + potentials.length) % potentials.length)
+		setActive((active + dir + ideas.length) % ideas.length)
 	}
 
 	return (
@@ -192,7 +189,7 @@ function Potentials() {
 					data-testid="potentials-list"
 					className="focus-visible:ring-primary/40 flex flex-col rounded focus:outline-none focus-visible:ring-2"
 				>
-					{potentials.map((item, i) => {
+					{ideas.map((item, i) => {
 						const selected = i === active
 						return (
 							<li

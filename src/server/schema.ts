@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core'
 
 /**
@@ -19,3 +20,21 @@ export const contactSubmissions = sqliteTable('contact_submissions', {
 
 export type ContactSubmission = typeof contactSubmissions.$inferSelect
 export type NewContactSubmission = typeof contactSubmissions.$inferInsert
+
+/**
+ * Editable "Project Ideas" shown on the home page. There's no admin UI — edit
+ * rows directly with `wrangler d1 execute` (see README). `sort` controls order
+ * (ascending); `id` defaults to a random hex so manual INSERTs can omit it.
+ */
+export const projectIdeas = sqliteTable('project_ideas', {
+	id: text('id')
+		.primaryKey()
+		.default(sql`(lower(hex(randomblob(16))))`),
+	sort: integer('sort').notNull().default(0),
+	name: text('name').notNull(),
+	tag: text('tag'),
+	body: text('body'),
+})
+
+export type ProjectIdea = typeof projectIdeas.$inferSelect
+export type NewProjectIdea = typeof projectIdeas.$inferInsert
