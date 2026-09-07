@@ -1,21 +1,28 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+	byStart,
 	closeAbandoned,
 	DEFAULT_SETTINGS,
+	draftError,
+	draftOf,
 	formatClock,
 	isFresh,
 	msFor,
 	normalizeSettings,
 	parseVideoId,
+	pomoFromDraft,
 	remainingOf,
 	restoreTimer,
 	resumablePomo,
+	resumeWindowMs,
 	straddlesRollover,
+	toLocalInput,
 	trackAt,
 	trackPos,
 	workDayOf,
 	type Pomo,
+	type Settings,
 	type Timer,
 } from './-lib'
 
@@ -209,29 +216,90 @@ describe('resumablePomo', () => {
 
 	it('offers the last pomo when it stopped short, recently, unreviewed', () => {
 		const pomo = pomoAt(now - 20 * 60_000, 10 * 60_000)
-		expect(resumablePomo([pomo], today, WORK_MS, now)).toBe(pomo)
+		expect(resumablePomo([pomo], today, DEFAULT_SETTINGS, now)).toBe(pomo)
 		expect(remainingOf(pomo, WORK_MS)).toBe(15 * 60_000)
 	})
 	it('leaves alone a pomo that ran its length, went cold, or was reviewed', () => {
-		expect(resumablePomo([pomoAt(now - 30 * 60_000, WORK_MS)], today, WORK_MS, now)).toBe(null)
-		expect(resumablePomo([pomoAt(now - 3 * 3_600_000, 10 * 60_000)], today, WORK_MS, now)).toBe(
-			null
-		)
+		expect(
+			resumablePomo([pomoAt(now - 30 * 60_000, WORK_MS)], today, DEFAULT_SETTINGS, now)
+		).toBe(null)
+		expect(
+			resumablePomo([pomoAt(now - 3 * 3_600_000, 10 * 60_000)], today, DEFAULT_SETTINGS, now)
+		).toBe(null)
 		expect(
 			resumablePomo(
 				[pomoAt(now - 20 * 60_000, 10 * 60_000, { confirmed: true })],
 				today,
-				WORK_MS,
+				DEFAULT_SETTINGS,
 				now
 			)
 		).toBe(null)
 		expect(
-			resumablePomo([pomoAt(now - 20 * 60_000, 10 * 60_000)], 'not-today', WORK_MS, now)
+			resumablePomo([pomoAt(now - 20 * 60_000, 10 * 60_000)], 'not-today', DEFAULT_SETTINGS, now)
 		).toBe(null)
-		expect(resumablePomo([pomoAt(now - 20 * 60_000, null)], today, WORK_MS, now)).toBe(null)
-		expect(resumablePomo([], today, WORK_MS, now)).toBe(null)
+		expect(resumablePomo([pomoAt(now - 20 * 60_000, null)], today, DEFAULT_SETTINGS, now)).toBe(
+			null
+		)
+		expect(resumablePomo([], today, DEFAULT_SETTINGS, now)).toBe(null)
 	})
 	it('always leaves enough on the clock to file a pomo', () => {
 		expect(remainingOf(pomoAt(now - 60 * 60_000, 60 * 60_000), WORK_MS)).toBe(60_000)
+	})
+})
+
+describe('resumeWindowMs', () => {
+	const longer: Settings = normalizeSettings({
+		phases: { work: { minutes: 50 }, break: { minutes: 10 } },
+	})
+
+	it('is one work + break cycle, so longer pomos get a longer window', () => {
+		expect(resumeWindowMs(DEFAULT_SETTINGS)).toBe(30 * 60_000)
+		expect(resumeWindowMs(longer)).toBe(60 * 60_000)
+	})
+	it('lets a pomo be picked up across a break the default settings would time out', () => {
+		const now = Date.now()
+		const today = workDayOf(new Date(now))
+		const stopped = [pomoAt(now - 60 * 60_000, 20 * 60_000)] // stopped 40m ago
+		expect(resumablePomo(stopped, today, DEFAULT_SETTINGS, now)).toBe(null)
+		expect(resumablePomo(stopped, today, longer, now)).toBe(stopped[0])
+	})
+	it('holds a paused timer for that long too', () => {
+		const now = Date.now()
+		const paused = {
+			phase: 'work',
+			endsAt: null,
+			remainingMs: 90_000,
+			savedAt: now - 40 * 60_000,
+		}
+		expect(restoreTimer(paused, DEFAULT_SETTINGS, now).remainingMs).toBe(WORK_MS)
+		expect(restoreTimer(paused, longer, now).remainingMs).toBe(90_000)
+	})
+})
+
+describe('editing a filed pomo', () => {
+	const noon = new Date(2026, 8, 7, 12, 0).getTime()
+	const pomo = pomoAt(noon, 25 * 60_000, { note: 'wrote the tests' })
+
+	it('round-trips through the form without changing anything', () => {
+		expect(pomoFromDraft(pomo, draftOf(pomo))).toEqual(pomo)
+	})
+	it('reads and writes the local clock, to the minute', () => {
+		expect(toLocalInput(pomo.start)).toBe('2026-09-07T12:00')
+		const moved = pomoFromDraft(pomo, { ...draftOf(pomo), start: '2026-09-07T09:30' })
+		expect(toLocalInput(moved.start)).toBe('2026-09-07T09:30')
+	})
+	it('puts a pomo back in progress when the end is cleared', () => {
+		expect(pomoFromDraft(pomo, { ...draftOf(pomo), end: '' }).end).toBe(null)
+	})
+	it('refuses a draft it cannot file', () => {
+		expect(draftError(draftOf(pomo))).toBe(null)
+		expect(draftError({ ...draftOf(pomo), day: 'yesterday' })).toMatch(/work day/)
+		expect(draftError({ ...draftOf(pomo), start: '' })).toMatch(/start time/)
+		expect(draftError({ ...draftOf(pomo), end: 'noon' })).toMatch(/end time/)
+		expect(draftError({ ...draftOf(pomo), end: '2026-09-07T11:00' })).toMatch(/before it started/)
+	})
+	it('sorts a moved pomo back into the ledger by when it started', () => {
+		const earlier = pomoAt(noon - 3 * 3_600_000, 25 * 60_000)
+		expect([pomo, earlier].sort(byStart).map((p) => p.id)).toEqual([earlier.id, pomo.id])
 	})
 })

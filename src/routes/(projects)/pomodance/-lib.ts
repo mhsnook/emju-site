@@ -45,10 +45,15 @@ export const MIN_POMO_MS = 60_000
 const DAY_ROLLOVER_HOURS = 4
 /** Past this gap since the last pomo, a new day starts without asking. */
 const LATE_NIGHT_GAP_MS = 3 * 3_600_000
-/** Past this gap, a stopped timer or pomo belongs to a session that is over. */
-export const RESUME_WINDOW_MS = 30 * 60_000
 /** A pomo that got this close to its full length ran out rather than stopped short. */
 const INTERRUPTED_SLACK_MS = 30_000
+
+/**
+ * How long a stopped timer or pomo stays pick-up-able: one full work + break
+ * cycle, so a session you walked away from mid-break is still the same session.
+ */
+export const resumeWindowMs = (settings: Settings) =>
+	msFor(settings, 'work') + msFor(settings, 'break')
 
 function read<T>(key: string, fallback: T): T {
 	if (typeof localStorage === 'undefined') return fallback
@@ -143,15 +148,67 @@ export const loadPomos = (workMinutes: number, keepLastOpen: boolean) =>
 export function resumablePomo(
 	pomos: Pomo[],
 	day: string,
-	workMs: number,
+	settings: Settings,
 	now: number
 ): Pomo | null {
 	const last = pomos.at(-1)
 	if (!last?.end || last.confirmed || last.day !== day) return null
 	const ended = Date.parse(last.end)
-	if (now - ended > RESUME_WINDOW_MS) return null
+	if (now - ended > resumeWindowMs(settings)) return null
+	const workMs = msFor(settings, 'work')
 	return ended - Date.parse(last.start) < workMs - INTERRUPTED_SLACK_MS ? last : null
 }
+
+/** The fields of a pomo as its edit form holds them, all as plain input strings. */
+export type PomoDraft = {
+	day: string
+	start: string
+	end: string
+	intention: string
+	note: string
+	confirmed: boolean
+}
+
+/** `datetime-local` has no timezone, so both directions go through the local clock. */
+export function toLocalInput(iso: string) {
+	const d = new Date(iso)
+	const pad = (n: number) => String(n).padStart(2, '0')
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+export const draftOf = (pomo: Pomo): PomoDraft => ({
+	day: pomo.day,
+	start: toLocalInput(pomo.start),
+	end: pomo.end ? toLocalInput(pomo.end) : '',
+	intention: pomo.intention,
+	note: pomo.note,
+	confirmed: pomo.confirmed,
+})
+
+/** What is wrong with the draft, or null when it can be filed. */
+export function draftError(draft: PomoDraft): string | null {
+	if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.day)) return 'The work day needs to be a date.'
+	const start = Date.parse(draft.start)
+	if (Number.isNaN(start)) return 'That start time is not a time.'
+	if (!draft.end) return null
+	const end = Date.parse(draft.end)
+	if (Number.isNaN(end)) return 'That end time is not a time.'
+	return end < start ? 'That pomo would end before it started.' : null
+}
+
+/** An empty end puts the pomo back in progress, which is how two get merged by hand. */
+export const pomoFromDraft = (pomo: Pomo, draft: PomoDraft): Pomo => ({
+	...pomo,
+	day: draft.day,
+	start: new Date(draft.start).toISOString(),
+	end: draft.end ? new Date(draft.end).toISOString() : null,
+	intention: draft.intention,
+	note: draft.note,
+	confirmed: draft.confirmed,
+})
+
+/** Edited times can land anywhere, and the ledger reads the list in order. */
+export const byStart = (a: Pomo, b: Pomo) => Date.parse(a.start) - Date.parse(b.start)
 
 /** What is left on the clock of an interrupted pomo, never less than a filable one. */
 export const remainingOf = (pomo: Pomo, workMs: number) =>
@@ -262,7 +319,7 @@ export function restoreTimer(stored: unknown, settings: Settings, now: number): 
 		return t.endsAt > now
 			? { phase: t.phase, endsAt: t.endsAt, remainingMs: t.endsAt - now }
 			: idleTimer(settings)
-	if (now - t.savedAt > RESUME_WINDOW_MS) return idleTimer(settings)
+	if (now - t.savedAt > resumeWindowMs(settings)) return idleTimer(settings)
 	return { phase: t.phase, endsAt: null, remainingMs: t.remainingMs }
 }
 

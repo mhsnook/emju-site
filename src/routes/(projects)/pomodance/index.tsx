@@ -6,9 +6,12 @@ import remarkGfm from 'remark-gfm'
 import { company } from '#/content/site'
 
 import {
+	byStart,
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
+	draftError,
+	draftOf,
 	fetchVideoTitle,
 	formatClock,
 	isFresh,
@@ -23,6 +26,7 @@ import {
 	MIN_POMO_MS,
 	msFor,
 	parseVideoId,
+	pomoFromDraft,
 	readPomos,
 	readTimer,
 	remainingOf,
@@ -42,6 +46,7 @@ import {
 	type Phase,
 	type PhaseSettings,
 	type Pomo,
+	type PomoDraft,
 	type Settings,
 	type Timer,
 	type YTPlayer,
@@ -135,6 +140,7 @@ function PomodancePage() {
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
 	const [askResume, setAskResume] = useState<Pomo | null>(null)
+	const [editing, setEditing] = useState<Pomo | null>(null)
 	const [askRollover, setAskRollover] = useState(false)
 	const [showSettings, setShowSettings] = useState(false)
 
@@ -216,9 +222,7 @@ function PomodancePage() {
 		if (running) return
 		const now = Date.now()
 		const interrupted =
-			phase === 'work' && !current
-				? resumablePomo(pomos, day, msFor(settings, 'work'), now)
-				: null
+			phase === 'work' && !current ? resumablePomo(pomos, day, settings, now) : null
 		if (interrupted) setAskResume(interrupted)
 		else startTimer(now)
 	}
@@ -470,7 +474,7 @@ function PomodancePage() {
 					</section>
 				</div>
 
-				{settings.showLedger && <Ledger pomos={pomos} day={day} />}
+				{settings.showLedger && <Ledger pomos={pomos} day={day} onEdit={setEditing} />}
 			</div>
 
 			<PomodanceFooter />
@@ -524,6 +528,21 @@ function PomodancePage() {
 					pomo={review}
 					onDismiss={() => finishReview(review.intention, false, false)}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
+				/>
+			)}
+
+			{editing && (
+				<EditPomoDialog
+					pomo={editing}
+					onDismiss={() => setEditing(null)}
+					onSave={(edited) => {
+						setPomos((ps) => ps.map((p) => (p.id === edited.id ? edited : p)).sort(byStart))
+						setEditing(null)
+					}}
+					onDelete={() => {
+						setPomos((ps) => ps.filter((p) => p.id !== editing.id))
+						setEditing(null)
+					}}
 				/>
 			)}
 
@@ -640,7 +659,11 @@ function PomodanceFooter() {
 				{CREDITS.map((link, i) => (
 					<Fragment key={link.href}>
 						{i > 0 && <span aria-hidden> · </span>}
-						<a href={link.href} className="underline underline-offset-2">
+						<a
+							id={`pomo-credit-${i}`}
+							href={link.href}
+							className="underline underline-offset-2"
+						>
 							{link.label}
 						</a>
 					</Fragment>
@@ -712,7 +735,7 @@ function SettingInput({
 	label: string
 	value: string
 	onChange: (v: string) => void
-	type?: 'text' | 'number'
+	type?: 'text' | 'number' | 'date' | 'datetime-local'
 	placeholder?: string
 	className?: string
 }) {
@@ -1104,7 +1127,115 @@ function ReviewDialog({
 	)
 }
 
-const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string }) {
+function EditPomoDialog({
+	pomo,
+	onSave,
+	onDelete,
+	onDismiss,
+}: {
+	pomo: Pomo
+	onSave: (pomo: Pomo) => void
+	onDelete: () => void
+	onDismiss: () => void
+}) {
+	const [draft, setDraft] = useState<PomoDraft>(() => draftOf(pomo))
+	const set = (patch: Partial<PomoDraft>) => setDraft((d) => ({ ...d, ...patch }))
+	const error = draftError(draft)
+
+	return (
+		<Modal testId="edit-dialog" onDismiss={onDismiss}>
+			<h2 className="font-display text-2xl">Edit this pomo</h2>
+			<div className="grid gap-3 sm:grid-cols-3">
+				<SettingInput
+					testId="edit-day"
+					label="Filed under"
+					type="date"
+					value={draft.day}
+					onChange={(v) => set({ day: v })}
+				/>
+				<SettingInput
+					testId="edit-start"
+					label="Started"
+					type="datetime-local"
+					value={draft.start}
+					onChange={(v) => set({ start: v })}
+				/>
+				<SettingInput
+					testId="edit-end"
+					label="Ended (empty = still going)"
+					type="datetime-local"
+					value={draft.end}
+					onChange={(v) => set({ end: v })}
+				/>
+			</div>
+			<SettingInput
+				testId="edit-intention"
+				label="Intention"
+				value={draft.intention}
+				onChange={(v) => set({ intention: v })}
+			/>
+			<label className="font-ui flex flex-col gap-1 text-sm">
+				<span className="opacity-70">Note</span>
+				<textarea
+					id="edit-note"
+					data-testid="edit-note"
+					value={draft.note}
+					onChange={(e) => set({ note: e.target.value })}
+					rows={3}
+					placeholder="- a bullet or two of markdown"
+					className="textarea w-full font-mono text-sm"
+				/>
+			</label>
+			<Toggle
+				testId="edit-confirmed"
+				label="Reviewed"
+				checked={draft.confirmed}
+				onChange={(v) => set({ confirmed: v })}
+			/>
+			{error && (
+				<p data-testid="edit-error" className="text-error text-sm">
+					{error}
+				</p>
+			)}
+			<div className="modal-action justify-between">
+				<button
+					type="button"
+					data-testid="edit-delete"
+					id="edit-delete"
+					className="btn btn-outline btn-error"
+					onClick={onDelete}
+				>
+					Delete it
+				</button>
+				<div className="flex gap-2">
+					<button type="button" id="edit-cancel" className="btn btn-ghost" onClick={onDismiss}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						data-testid="edit-save"
+						id="edit-save"
+						disabled={error !== null}
+						className="btn btn-primary"
+						onClick={() => onSave(pomoFromDraft(pomo, draft))}
+					>
+						Save
+					</button>
+				</div>
+			</div>
+		</Modal>
+	)
+}
+
+const Ledger = memo(function Ledger({
+	pomos,
+	day,
+	onEdit,
+}: {
+	pomos: Pomo[]
+	day: string
+	onEdit: (pomo: Pomo) => void
+}) {
 	const today = pomos.filter((p) => p.day === day)
 	const earlier = pomos.filter((p) => p.day !== day)
 	const earlierDays = [...new Set(earlier.map((p) => p.day))].sort().reverse()
@@ -1115,14 +1246,14 @@ const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string
 		>
 			<h2 className="font-display text-xl">{dayLabel(day)}</h2>
 			{today.length === 0 && <p className="opacity-60">No pomos yet today.</p>}
-			<PomoList pomos={today} />
+			<PomoList pomos={today} onEdit={onEdit} />
 			{earlierDays.length > 0 && (
 				<details className="opacity-70 open:opacity-100">
 					<summary className="cursor-pointer">Earlier days</summary>
 					{earlierDays.map((d) => (
 						<div key={d} className="mt-3">
 							<h3 className="font-bold">{dayLabel(d)}</h3>
-							<PomoList pomos={earlier.filter((p) => p.day === d)} />
+							<PomoList pomos={earlier.filter((p) => p.day === d)} onEdit={onEdit} />
 						</div>
 					))}
 				</details>
@@ -1131,7 +1262,7 @@ const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string
 	)
 })
 
-function PomoList({ pomos }: { pomos: Pomo[] }) {
+function PomoList({ pomos, onEdit }: { pomos: Pomo[]; onEdit: (pomo: Pomo) => void }) {
 	return (
 		<ol className="flex flex-col gap-2">
 			{pomos.map((p) => (
@@ -1148,8 +1279,23 @@ function PomoList({ pomos }: { pomos: Pomo[] }) {
 							{fmtTime(p.start)} – {p.end ? fmtTime(p.end) : 'now'}
 							{p.end && ` · ${minutesBetween(p.start, p.end)}m`}
 						</span>
-						<span title={p.confirmed ? 'confirmed' : p.end ? 'unconfirmed' : 'in progress'}>
-							{p.confirmed ? '✅' : p.end ? '◌' : '⏳'}
+						<span className="flex items-center gap-1">
+							<span
+								title={p.confirmed ? 'confirmed' : p.end ? 'unconfirmed' : 'in progress'}
+							>
+								{p.confirmed ? '✅' : p.end ? '◌' : '⏳'}
+							</span>
+							<button
+								type="button"
+								data-testid="ledger-edit"
+								id={`ledger-edit-${p.id}`}
+								aria-label={`Edit the pomo that started at ${fmtTime(p.start)}`}
+								title="Edit"
+								onClick={() => onEdit(p)}
+								className="btn btn-ghost btn-xs"
+							>
+								✎
+							</button>
 						</span>
 					</div>
 					<div

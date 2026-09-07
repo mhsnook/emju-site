@@ -49,3 +49,23 @@ visitor:
 - seeText Pause
 - see ledger-entry #1
 - seeText keep the pomo going
+
+# visitor can edit a pomo in the ledger, or throw it away
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'the first draft'
+- click start-button
+- see ledger-entry #1
+- click ledger-edit
+- see edit-dialog
+- typeInto edit-intention 'what I actually did'
+- click edit-save
+- notSee edit-dialog
+- seeText what I actually did
+- click ledger-edit
+- click edit-delete
+- notSee ledger-entry
