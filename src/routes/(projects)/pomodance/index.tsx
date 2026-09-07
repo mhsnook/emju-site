@@ -23,7 +23,7 @@ import {
 	loadSettings,
 	loadTimer,
 	loadYouTubeApi,
-	MIN_POMO_MS,
+	isThrowaway,
 	msFor,
 	parseVideoId,
 	pomoFromDraft,
@@ -203,7 +203,7 @@ function PomodancePage() {
 
 	const closePomo = (now: number) => {
 		if (!current) return
-		if (now - Date.parse(current.start) < MIN_POMO_MS) {
+		if (isThrowaway(current, now)) {
 			setPomos((ps) => ps.filter((p) => p.id !== current.id))
 			return
 		}
@@ -526,7 +526,9 @@ function PomodancePage() {
 			{review && (
 				<ReviewDialog
 					pomo={review}
-					onDismiss={() => finishReview(review.intention, false, false)}
+					onDismiss={() =>
+						finishReview(review.note || review.intention, review.confirmed, false)
+					}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
 				/>
 			)}
@@ -1083,7 +1085,7 @@ function ReviewDialog({
 	onDismiss: () => void
 	onSave: (note: string, clearIntention: boolean) => void
 }) {
-	const [text, setText] = useState(pomo.intention)
+	const [text, setText] = useState(pomo.note || pomo.intention)
 	return (
 		<Modal testId="review-dialog" onDismiss={onDismiss}>
 			<form

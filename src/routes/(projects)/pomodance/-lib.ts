@@ -215,6 +215,14 @@ export const pomoFromDraft = (pomo: Pomo, draft: PomoDraft): Pomo => ({
 /** Edited times can land anywhere, and the ledger reads the list in order. */
 export const byStart = (a: Pomo, b: Pomo) => Date.parse(a.start) - Date.parse(b.start)
 
+/**
+ * Whether a pomo is dropped rather than filed when it ends. Too short to be
+ * worth a ledger entry — unless it has been reviewed, which is someone saying
+ * this one counts however long it ran.
+ */
+export const isThrowaway = (pomo: Pomo, now: number) =>
+	!pomo.confirmed && now - Date.parse(pomo.start) < MIN_POMO_MS
+
 /** What is left on the clock of an interrupted pomo, never less than a filable one. */
 export const remainingOf = (pomo: Pomo, workMs: number) =>
 	Math.max(MIN_POMO_MS, workMs - (Date.parse(pomo.end ?? pomo.start) - Date.parse(pomo.start)))

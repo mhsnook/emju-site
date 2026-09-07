@@ -6,6 +6,7 @@ import {
 	DEFAULT_SETTINGS,
 	draftError,
 	draftOf,
+	isThrowaway,
 	formatClock,
 	isFresh,
 	msFor,
@@ -308,5 +309,17 @@ describe('editing a filed pomo', () => {
 	it('sorts a moved pomo back into the ledger by when it started', () => {
 		const earlier = pomoAt(noon - 3 * 3_600_000, 25 * 60_000)
 		expect([pomo, earlier].sort(byStart).map((p) => p.id)).toEqual([earlier.id, pomo.id])
+	})
+})
+
+describe('isThrowaway', () => {
+	const now = Date.now()
+
+	it('drops a pomo that barely ran', () => {
+		expect(isThrowaway(pomoAt(now - 20_000, null), now)).toBe(true)
+		expect(isThrowaway(pomoAt(now - 5 * 60_000, null), now)).toBe(false)
+	})
+	it('keeps one that has been reviewed, however short it ran', () => {
+		expect(isThrowaway(pomoAt(now - 20_000, null, { confirmed: true }), now)).toBe(false)
 	})
 })

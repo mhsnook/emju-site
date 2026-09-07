@@ -84,3 +84,27 @@ keeper:
 - click edit-delete
 - notSee edit-dialog
 - notSee ledger-entry
+
+# a reviewed pomo survives the switch to break, however short it was
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'quick but worth keeping'
+- click start-button
+- see ledger-entry #1
+- click ledger-edit
+- see edit-dialog
+- typeInto edit-note 'already written up'
+- check edit-confirmed
+- click edit-save
+- notSee edit-dialog
+- click switch-button
+- seeText break time
+- see review-dialog
+- pressKey Escape
+- notSee review-dialog
+- see ledger-entry #1
+- seeText already written up
