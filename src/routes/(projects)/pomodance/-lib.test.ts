@@ -10,7 +10,7 @@ import {
 	trackPos,
 	workDayOf,
 	type Pomo,
-} from './pomodance'
+} from './-lib'
 
 describe('parseVideoId', () => {
 	it('accepts bare ids and the usual url shapes', () => {

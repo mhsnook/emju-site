@@ -1,4 +1,4 @@
-import { HeadContent, Scripts, createRootRoute } from '@tanstack/react-router'
+import { HeadContent, Scripts, createRootRoute, useRouterState } from '@tanstack/react-router'
 
 import { Footer } from '../components/footer'
 import { Header } from '../components/header'
@@ -32,6 +32,10 @@ export const Route = createRootRoute({
 })
 
 function RootDocument({ children }: { children: React.ReactNode }) {
+	const bare = useRouterState({
+		select: (s) => s.matches.some((m) => m.staticData.bareLayout === true),
+	})
+
 	return (
 		<html lang="en" data-theme="emju">
 			<head>
@@ -39,11 +43,11 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 			</head>
 			<body>
 				<div className="bg-base-100 text-base-content flex min-h-screen flex-col">
-					<Header />
+					{!bare && <Header />}
 					<main id="main-content" data-testid="main-content" className="flex-1">
 						{children}
 					</main>
-					<Footer />
+					{!bare && <Footer />}
 				</div>
 				<Scripts />
 			</body>

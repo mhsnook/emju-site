@@ -10,6 +10,8 @@ export const company = {
 		'Software consulting, team process, and product incubation for the education and technology sectors.',
 	registration: 'Registered company in Bangalore, KA, India.',
 	email: 'hello@emju.in',
+	site: 'https://emju.in',
+	repo: 'https://github.com/mhsnook/emju-site',
 } as const
 
 export const hero = {

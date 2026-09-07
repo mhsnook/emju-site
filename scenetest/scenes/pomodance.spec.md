@@ -10,6 +10,9 @@ visitor:
 
 - openTo /pomodance
 - see pomodance-page
+- notSee site-header
+- notSee site-footer
+- see pomodance-footer
 - see clock
 - wait 1000
 - typeInto intention-input 'write a scene'
