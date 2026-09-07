@@ -6,26 +6,39 @@ import remarkGfm from 'remark-gfm'
 import { company } from '#/content/site'
 
 import {
+	byStart,
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
+	draftError,
+	draftOf,
 	fetchVideoTitle,
 	formatClock,
+	isFresh,
+	keepIfSame,
 	loadCursors,
 	loadDay,
 	loadIntention,
 	loadPomos,
 	loadSettings,
+	loadTimer,
 	loadYouTubeApi,
-	MIN_POMO_MS,
+	isThrowaway,
 	msFor,
 	parseVideoId,
+	pomoFromDraft,
+	readPomos,
+	readTimer,
+	remainingOf,
+	resumablePomo,
 	saveCursors,
 	saveDay,
 	saveIntention,
 	savePomos,
 	saveSettings,
+	saveTimer,
 	sounds,
+	STORAGE_PREFIX,
 	straddlesRollover,
 	trackAt,
 	trackPos,
@@ -33,7 +46,9 @@ import {
 	type Phase,
 	type PhaseSettings,
 	type Pomo,
+	type PomoDraft,
 	type Settings,
+	type Timer,
 	type YTPlayer,
 } from './-lib'
 
@@ -70,12 +85,11 @@ const MINUTES_LABEL: Record<Phase, string> = {
 	break: 'Break minutes',
 }
 
-// endsAt set means running; remainingMs is only meaningful while endsAt is null.
-type Timer = { phase: Phase; endsAt: number | null; remainingMs: number }
 type TimerAction =
 	| { type: 'start'; now: number }
 	| { type: 'pause'; now: number }
 	| { type: 'switch'; phase: Phase; durationMs: number; running: boolean; now: number }
+	| { type: 'restore'; timer: Timer }
 
 function timerReducer(t: Timer, a: TimerAction): Timer {
 	switch (a.type) {
@@ -89,6 +103,8 @@ function timerReducer(t: Timer, a: TimerAction): Timer {
 				remainingMs: a.durationMs,
 				endsAt: a.running ? a.now + a.durationMs : null,
 			}
+		case 'restore':
+			return keepIfSame(t, a.timer)
 	}
 }
 
@@ -99,6 +115,20 @@ const minutesBetween = (a: string, b: string) =>
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
 const PROGRESS_SAVE_MS = 5_000
+/** Long enough for a player told to play to have reached playing or buffering. */
+const PLAYBACK_CHECK_MS = 1_500
+
+/** Whether sound is on its way out of this player, rather than waiting on a click. */
+function playbackUnderway(player: YTPlayer) {
+	const YT = window.YT
+	if (!YT) return false
+	try {
+		const state = player.getPlayerState()
+		return state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING
+	} catch {
+		return true
+	}
+}
 
 function PomodancePage() {
 	const [settings, setSettings] = useState<Settings>(loadSettings)
@@ -113,31 +143,58 @@ function PomodancePage() {
 		work: restored.work.seconds,
 		break: restored.break.seconds,
 	})
-	const [timer, dispatch] = useReducer(timerReducer, {
-		phase: 'work',
-		endsAt: null,
-		remainingMs: msFor(settings, 'work'),
-	} satisfies Timer)
+	const [timer, dispatch] = useReducer(timerReducer, settings, loadTimer)
 	const [intention, setIntention] = useState(loadIntention)
-	const [pomos, setPomos] = useState(() => loadPomos(settings.phases.work.minutes))
+	// a restored work timer is a pomo still in progress, so it keeps its ledger entry open
+	const [pomos, setPomos] = useState(() =>
+		loadPomos(settings.phases.work.minutes, timer.phase === 'work' && !isFresh(timer, settings))
+	)
 	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
 
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
+	const [askResume, setAskResume] = useState<Pomo | null>(null)
+	const [editing, setEditing] = useState<Pomo | null>(null)
 	const [askRollover, setAskRollover] = useState(false)
 	const [showSettings, setShowSettings] = useState(false)
 
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
+	const played = useRef<Record<Phase, boolean>>({ work: false, break: false })
 	const [playersReady, setPlayersReady] = useState(0)
+	const [musicBlocked, setMusicBlocked] = useState(false)
 
 	const { phase } = timer
 	const running = timer.endsAt !== null
 	const isBreak = phase === 'break'
-	const idle = !running && timer.remainingMs === msFor(settings, phase)
+	const idle = isFresh(timer, settings)
 	const current = pomos.find((p) => p.end === null) ?? null
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
+	useEffect(() => saveTimer(timer), [timer])
+
+	// This tab is not the only writer: another tab, or a hand edit in devtools,
+	// can move the same keys underneath it.
+	useEffect(() => {
+		const sync = () => {
+			const stored = loadSettings()
+			setSettings((prev) => keepIfSame(prev, stored))
+			setPomos((prev) => keepIfSame(prev, readPomos()))
+			setIntention(loadIntention())
+			setDay(loadDay() ?? workDayOf(new Date()))
+			const t = readTimer()
+			if (t) dispatch({ type: 'restore', timer: t })
+		}
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === null || e.key.startsWith(STORAGE_PREFIX)) sync()
+		}
+		window.addEventListener('storage', onStorage)
+		window.addEventListener('focus', sync)
+		return () => {
+			window.removeEventListener('storage', onStorage)
+			window.removeEventListener('focus', sync)
+		}
+	}, [])
 
 	const patchPomo = (id: string, patch: Partial<Pomo>) =>
 		setPomos((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -161,7 +218,7 @@ function PomodancePage() {
 
 	const closePomo = (now: number) => {
 		if (!current) return
-		if (now - Date.parse(current.start) < MIN_POMO_MS) {
+		if (isThrowaway(current, now)) {
 			setPomos((ps) => ps.filter((p) => p.id !== current.id))
 			return
 		}
@@ -170,12 +227,34 @@ function PomodancePage() {
 		setReview(closed)
 	}
 
-	const start = () => {
-		if (running) return
-		const now = Date.now()
+	const startTimer = (now: number) => {
 		sounds.beep()
 		dispatch({ type: 'start', now })
 		if (phase === 'work') openPomo(now)
+	}
+
+	const start = () => {
+		if (running) return
+		const now = Date.now()
+		const interrupted =
+			phase === 'work' && !current ? resumablePomo(pomos, day, settings, now) : null
+		if (interrupted) setAskResume(interrupted)
+		else startTimer(now)
+	}
+
+	const resumePomo = (pomo: Pomo) => {
+		const now = Date.now()
+		sounds.beep()
+		patchPomo(pomo.id, { end: null })
+		if (pomo.intention && !intention) updateIntention(pomo.intention)
+		dispatch({
+			type: 'switch',
+			phase: 'work',
+			durationMs: remainingOf(pomo, msFor(settings, 'work')),
+			running: true,
+			now,
+		})
+		setAskResume(null)
 	}
 	const pause = () => {
 		if (!running) return
@@ -227,16 +306,36 @@ function PomodancePage() {
 	// pressing play on the other one is a request to switch phases, so it gets
 	// paused again and routed through the confirm dialog.
 	useEffect(() => {
+		let check: ReturnType<typeof setTimeout> | undefined
 		for (const p of PHASES) {
 			const player = players.current[p]
 			if (!player) continue
-			if (p === phase && running) player.playVideo()
-			else {
+			if (p === phase && running) {
+				player.playVideo()
+				// a page that has not been clicked yet is not allowed to start audio,
+				// and the refusal is silent: ask the player afterwards whether it took
+				check = setTimeout(() => setMusicBlocked(!playbackUnderway(player)), PLAYBACK_CHECK_MS)
+			} else {
 				captureRef.current(p)
 				player.pauseVideo()
 			}
 		}
+		if (!running) setMusicBlocked(false)
+		return () => clearTimeout(check)
 	}, [phase, running, playersReady])
+
+	// the click that dismisses the notice is a user gesture wherever it lands, so
+	// any click or key will do
+	useEffect(() => {
+		if (!musicBlocked) return
+		const retry = () => players.current[phase]?.playVideo()
+		window.addEventListener('pointerdown', retry)
+		window.addEventListener('keydown', retry)
+		return () => {
+			window.removeEventListener('pointerdown', retry)
+			window.removeEventListener('keydown', retry)
+		}
+	}, [musicBlocked, phase])
 
 	const setTrack = (p: Phase, index: number) => {
 		seconds.current[p] = 0
@@ -247,6 +346,10 @@ function PomodancePage() {
 
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
+		if (state === YT.PlayerState.PLAYING) {
+			played.current[p] = true
+			if (p === phase) setMusicBlocked(false)
+		}
 		if (state === YT.PlayerState.ENDED) {
 			setTrack(p, trackIndex[p] + 1)
 			return
@@ -262,7 +365,9 @@ function PomodancePage() {
 			return
 		}
 		if (state === YT.PlayerState.PLAYING) start()
-		else if (state === YT.PlayerState.PAUSED) pause()
+		// a browser that blocked the autoplay of a restored pomo reports the player
+		// as paused; only a player that did get going may stop the clock
+		else if (state === YT.PlayerState.PAUSED && played.current[p]) pause()
 	}
 	const onPlayerStateRef = useRef(onPlayerState)
 	onPlayerStateRef.current = onPlayerState
@@ -324,6 +429,7 @@ function PomodancePage() {
 						</div>
 						<button
 							type="button"
+							id="pomo-settings"
 							data-testid="settings-button"
 							aria-label="Settings"
 							title="Settings"
@@ -349,15 +455,19 @@ function PomodancePage() {
 							isBreak={isBreak}
 							onComplete={complete}
 						/>
+						{/* the ids are what the keyboard scene actor tells focus stops apart by
+						    (tag name + id), so four bare buttons in a row read as a tab cycle */}
 						<div className="flex flex-wrap justify-center gap-3">
 							<button
+								id="pomo-start"
 								data-testid="start-button"
-								onClick={running ? pause : start}
+								onClick={() => (running ? pause() : start())}
 								className="btn btn-lg rounded-full border-0 bg-[var(--pomo-accent)] font-bold text-black hover:scale-105 hover:bg-[var(--pomo-accent)]"
 							>
 								{running ? 'Pause' : idle ? 'Start' : 'Resume'}
 							</button>
 							<button
+								id="pomo-reset"
 								data-testid="reset-button"
 								onClick={() => switchTo(phase, false)}
 								className="btn btn-lg btn-outline rounded-full"
@@ -365,6 +475,7 @@ function PomodancePage() {
 								Reset
 							</button>
 							<button
+								id="pomo-switch"
 								data-testid="switch-button"
 								onClick={() => switchTo(isBreak ? 'work' : 'break', true)}
 								className="btn btn-lg btn-outline rounded-full"
@@ -381,6 +492,27 @@ function PomodancePage() {
 							placeholder="what are you going to do?"
 						/>
 					</section>
+
+					{musicBlocked && (
+						<div
+							data-testid="music-blocked"
+							className="flex flex-col items-center gap-1 text-center"
+						>
+							<button
+								type="button"
+								data-testid="resume-music"
+								id="resume-music"
+								onClick={() => players.current[phase]?.playVideo()}
+								className="btn btn-outline rounded-full"
+							>
+								▶ Bring the music back
+							</button>
+							<p className="font-ui text-xs opacity-70">
+								Browsers don’t let a page start audio on its own, so the soundtrack needs
+								one click after a reload.
+							</p>
+						</div>
+					)}
 
 					<section className="grid items-start gap-4 md:grid-cols-3">
 						{PHASES.map((p) => (
@@ -401,7 +533,7 @@ function PomodancePage() {
 					</section>
 				</div>
 
-				{settings.showLedger && <Ledger pomos={pomos} day={day} />}
+				{settings.showLedger && <Ledger pomos={pomos} day={day} onEdit={setEditing} />}
 			</div>
 
 			<PomodanceFooter />
@@ -453,9 +585,67 @@ function PomodancePage() {
 			{review && (
 				<ReviewDialog
 					pomo={review}
-					onDismiss={() => finishReview(review.intention, false, false)}
+					onDismiss={() =>
+						finishReview(review.note || review.intention, review.confirmed, false)
+					}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
 				/>
+			)}
+
+			{editing && (
+				<EditPomoDialog
+					pomo={editing}
+					otherInProgress={current !== null && current.id !== editing.id}
+					onDismiss={() => setEditing(null)}
+					onSave={(edited) => {
+						setPomos((ps) => ps.map((p) => (p.id === edited.id ? edited : p)).sort(byStart))
+						setEditing(null)
+					}}
+					onDelete={() => {
+						setPomos((ps) => ps.filter((p) => p.id !== editing.id))
+						setEditing(null)
+					}}
+				/>
+			)}
+
+			{askResume && (
+				<Modal testId="resume-dialog" onDismiss={() => setAskResume(null)}>
+					<h2 className="font-display text-2xl">Pick your last pomo back up?</h2>
+					<p>
+						You started it at {fmtTime(askResume.start)} and it stopped{' '}
+						{minutesBetween(askResume.start, askResume.end!)}m later, with{' '}
+						{Math.ceil(remainingOf(askResume, msFor(settings, 'work')) / 60_000)}m still on
+						the clock.
+					</p>
+					{askResume.intention && (
+						<div className="prose prose-sm prose-invert max-w-none opacity-75">
+							<ReactMarkdown remarkPlugins={[remarkGfm]}>
+								{askResume.intention}
+							</ReactMarkdown>
+						</div>
+					)}
+					<div className="modal-action">
+						<button
+							type="button"
+							data-testid="resume-fresh"
+							className="btn btn-outline"
+							onClick={() => {
+								setAskResume(null)
+								startTimer(Date.now())
+							}}
+						>
+							No, start a new one
+						</button>
+						<button
+							type="button"
+							data-testid="resume-yes"
+							className="btn btn-primary"
+							onClick={() => resumePomo(askResume)}
+						>
+							Yes, carry on
+						</button>
+					</div>
+				</Modal>
 			)}
 
 			{confirmSwitch && (
@@ -531,7 +721,11 @@ function PomodanceFooter() {
 				{CREDITS.map((link, i) => (
 					<Fragment key={link.href}>
 						{i > 0 && <span aria-hidden> · </span>}
-						<a href={link.href} className="underline underline-offset-2">
+						<a
+							id={`pomo-credit-${i}`}
+							href={link.href}
+							className="underline underline-offset-2"
+						>
 							{link.label}
 						</a>
 					</Fragment>
@@ -603,7 +797,7 @@ function SettingInput({
 	label: string
 	value: string
 	onChange: (v: string) => void
-	type?: 'text' | 'number'
+	type?: 'text' | 'number' | 'date' | 'datetime-local'
 	placeholder?: string
 	className?: string
 }) {
@@ -611,6 +805,7 @@ function SettingInput({
 		<label className={cn('font-ui flex flex-col gap-1 text-sm', className)}>
 			<span className="opacity-70">{label}</span>
 			<input
+				id={testId}
 				data-testid={testId}
 				type={type}
 				min={type === 'number' ? 1 : undefined}
@@ -639,6 +834,7 @@ function Toggle({
 	return (
 		<label className="font-ui flex cursor-pointer items-start gap-3 text-sm">
 			<input
+				id={testId}
 				data-testid={testId}
 				type="checkbox"
 				checked={checked}
@@ -746,7 +942,11 @@ function PhaseVideo({
 				data-testid={`${phase}-playlist`}
 				className="font-ui text-sm opacity-80 open:opacity-100"
 			>
-				<summary data-testid={`${phase}-playlist-toggle`} className="cursor-pointer">
+				<summary
+					id={`${phase}-playlist-toggle`}
+					data-testid={`${phase}-playlist-toggle`}
+					className="cursor-pointer"
+				>
 					Playlist ({videos.length})
 				</summary>
 				<div className="mt-2 flex flex-col gap-2">
@@ -755,6 +955,7 @@ function PhaseVideo({
 							<li key={`${id}-${i}`} className="flex items-center gap-2">
 								<button
 									type="button"
+									id={`${phase}-playlist-play-${i}`}
 									data-testid={`${phase}-playlist-play-${i}`}
 									title="Play this one next"
 									aria-label={`Play this one next: ${titleOf(id)}`}
@@ -776,6 +977,7 @@ function PhaseVideo({
 								</a>
 								<button
 									type="button"
+									id={`${phase}-playlist-remove-${i}`}
 									data-testid={`${phase}-playlist-remove-${i}`}
 									aria-label={`Remove: ${titleOf(id)}`}
 									title="Remove"
@@ -795,6 +997,7 @@ function PhaseVideo({
 						}}
 					>
 						<input
+							id={`${phase}-playlist-input`}
 							data-testid={`${phase}-playlist-input`}
 							value={draft}
 							placeholder="Paste a youtube link or id"
@@ -806,6 +1009,7 @@ function PhaseVideo({
 						/>
 						<button
 							type="submit"
+							id={`${phase}-playlist-add`}
 							data-testid={`${phase}-playlist-add`}
 							className="btn btn-sm"
 						>
@@ -940,7 +1144,7 @@ function ReviewDialog({
 	onDismiss: () => void
 	onSave: (note: string, clearIntention: boolean) => void
 }) {
-	const [text, setText] = useState(pomo.intention)
+	const [text, setText] = useState(pomo.note || pomo.intention)
 	return (
 		<Modal testId="review-dialog" onDismiss={onDismiss}>
 			<form
@@ -985,7 +1189,124 @@ function ReviewDialog({
 	)
 }
 
-const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string }) {
+function EditPomoDialog({
+	pomo,
+	otherInProgress,
+	onSave,
+	onDelete,
+	onDismiss,
+}: {
+	pomo: Pomo
+	otherInProgress: boolean
+	onSave: (pomo: Pomo) => void
+	onDelete: () => void
+	onDismiss: () => void
+}) {
+	const [draft, setDraft] = useState<PomoDraft>(() => draftOf(pomo))
+	const set = (patch: Partial<PomoDraft>) => setDraft((d) => ({ ...d, ...patch }))
+	const error = draftError(draft, otherInProgress)
+	const inProgress = pomo.end === null
+
+	return (
+		<Modal testId="edit-dialog" onDismiss={onDismiss}>
+			<h2 className="font-display text-2xl">Edit this pomo</h2>
+			<div className="grid gap-3 sm:grid-cols-3">
+				<SettingInput
+					testId="edit-day"
+					label="Filed under"
+					type="date"
+					value={draft.day}
+					onChange={(v) => set({ day: v })}
+				/>
+				<SettingInput
+					testId="edit-start"
+					label="Started"
+					type="datetime-local"
+					value={draft.start}
+					onChange={(v) => set({ start: v })}
+				/>
+				<SettingInput
+					testId="edit-end"
+					label="Ended (empty = still going)"
+					type="datetime-local"
+					value={draft.end}
+					onChange={(v) => set({ end: v })}
+				/>
+			</div>
+			<SettingInput
+				testId="edit-intention"
+				label="Intention"
+				value={draft.intention}
+				onChange={(v) => set({ intention: v })}
+			/>
+			<label className="font-ui flex flex-col gap-1 text-sm">
+				<span className="opacity-70">Note</span>
+				<textarea
+					id="edit-note"
+					data-testid="edit-note"
+					value={draft.note}
+					onChange={(e) => set({ note: e.target.value })}
+					rows={3}
+					placeholder="- a bullet or two of markdown"
+					className="textarea w-full font-mono text-sm"
+				/>
+			</label>
+			<Toggle
+				testId="edit-confirmed"
+				label="Reviewed"
+				checked={draft.confirmed}
+				onChange={(v) => set({ confirmed: v })}
+			/>
+			{error && (
+				<p data-testid="edit-error" className="text-error text-sm">
+					{error}
+				</p>
+			)}
+			<div className="modal-action justify-between">
+				{inProgress ? (
+					<p data-testid="edit-delete-blocked" className="max-w-2xs text-xs opacity-70">
+						This one is still going. Stop the timer, then delete the finished entry.
+					</p>
+				) : (
+					<button
+						type="button"
+						data-testid="edit-delete"
+						id="edit-delete"
+						className="btn btn-outline btn-error"
+						onClick={onDelete}
+					>
+						Delete it
+					</button>
+				)}
+				<div className="flex gap-2">
+					<button type="button" id="edit-cancel" className="btn btn-ghost" onClick={onDismiss}>
+						Cancel
+					</button>
+					<button
+						type="button"
+						data-testid="edit-save"
+						id="edit-save"
+						disabled={error !== null}
+						className="btn btn-primary"
+						onClick={() => onSave(pomoFromDraft(pomo, draft))}
+					>
+						Save
+					</button>
+				</div>
+			</div>
+		</Modal>
+	)
+}
+
+const Ledger = memo(function Ledger({
+	pomos,
+	day,
+	onEdit,
+}: {
+	pomos: Pomo[]
+	day: string
+	onEdit: (pomo: Pomo) => void
+}) {
 	const today = pomos.filter((p) => p.day === day)
 	const earlier = pomos.filter((p) => p.day !== day)
 	const earlierDays = [...new Set(earlier.map((p) => p.day))].sort().reverse()
@@ -996,14 +1317,14 @@ const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string
 		>
 			<h2 className="font-display text-xl">{dayLabel(day)}</h2>
 			{today.length === 0 && <p className="opacity-60">No pomos yet today.</p>}
-			<PomoList pomos={today} />
+			<PomoList pomos={today} onEdit={onEdit} />
 			{earlierDays.length > 0 && (
 				<details className="opacity-70 open:opacity-100">
 					<summary className="cursor-pointer">Earlier days</summary>
 					{earlierDays.map((d) => (
 						<div key={d} className="mt-3">
 							<h3 className="font-bold">{dayLabel(d)}</h3>
-							<PomoList pomos={earlier.filter((p) => p.day === d)} />
+							<PomoList pomos={earlier.filter((p) => p.day === d)} onEdit={onEdit} />
 						</div>
 					))}
 				</details>
@@ -1012,7 +1333,7 @@ const Ledger = memo(function Ledger({ pomos, day }: { pomos: Pomo[]; day: string
 	)
 })
 
-function PomoList({ pomos }: { pomos: Pomo[] }) {
+function PomoList({ pomos, onEdit }: { pomos: Pomo[]; onEdit: (pomo: Pomo) => void }) {
 	return (
 		<ol className="flex flex-col gap-2">
 			{pomos.map((p) => (
@@ -1029,8 +1350,23 @@ function PomoList({ pomos }: { pomos: Pomo[] }) {
 							{fmtTime(p.start)} – {p.end ? fmtTime(p.end) : 'now'}
 							{p.end && ` · ${minutesBetween(p.start, p.end)}m`}
 						</span>
-						<span title={p.confirmed ? 'confirmed' : p.end ? 'unconfirmed' : 'in progress'}>
-							{p.confirmed ? '✅' : p.end ? '◌' : '⏳'}
+						<span className="flex items-center gap-1">
+							<span
+								title={p.confirmed ? 'confirmed' : p.end ? 'unconfirmed' : 'in progress'}
+							>
+								{p.confirmed ? '✅' : p.end ? '◌' : '⏳'}
+							</span>
+							<button
+								type="button"
+								data-testid="ledger-edit"
+								id={`ledger-edit-${p.id}`}
+								aria-label={`Edit the pomo that started at ${fmtTime(p.start)}`}
+								title="Edit"
+								onClick={() => onEdit(p)}
+								className="btn btn-ghost btn-xs"
+							>
+								✎
+							</button>
 						</span>
 					</div>
 					<div

@@ -30,3 +30,81 @@ visitor:
 - see ledger
 - click break-playlist-toggle
 - see break-playlist-input
+
+# a running pomo survives a reload
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'keep the pomo going'
+- click start-button
+- seeText Pause
+- see ledger-entry #1
+- wait 1000
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText Pause
+- see ledger-entry #1
+- seeText keep the pomo going
+
+# visitor can edit a pomo, but not delete the one still running
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'the first draft'
+- click start-button
+- see ledger-entry #1
+- click ledger-edit
+- see edit-dialog
+- see edit-delete-blocked
+- notSee edit-delete
+- typeInto edit-intention 'what I actually did'
+- click edit-save
+- notSee edit-dialog
+- seeText what I actually did
+
+# keeper can throw away a pomo that has finished
+
+keeper:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText a pomo from an earlier sitting
+- see ledger-entry #1
+- click ledger-edit
+- see edit-dialog
+- see edit-delete
+- click edit-delete
+- notSee edit-dialog
+- notSee ledger-entry
+
+# a reviewed pomo survives the switch to break, however short it was
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'quick but worth keeping'
+- click start-button
+- see ledger-entry #1
+- click ledger-edit
+- see edit-dialog
+- typeInto edit-note 'already written up'
+- check edit-confirmed
+- click edit-save
+- notSee edit-dialog
+- click switch-button
+- seeText break time
+- see review-dialog
+- pressKey Escape
+- notSee review-dialog
+- see ledger-entry #1
+- seeText already written up
