@@ -50,7 +50,7 @@ visitor:
 - see ledger-entry #1
 - seeText keep the pomo going
 
-# visitor can edit a pomo in the ledger, or throw it away
+# visitor can edit a pomo, but not delete the one still running
 
 visitor:
 
@@ -62,10 +62,25 @@ visitor:
 - see ledger-entry #1
 - click ledger-edit
 - see edit-dialog
+- see edit-delete-blocked
+- notSee edit-delete
 - typeInto edit-intention 'what I actually did'
 - click edit-save
 - notSee edit-dialog
 - seeText what I actually did
+
+# keeper can throw away a pomo that has finished
+
+keeper:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText a pomo from an earlier sitting
+- see ledger-entry #1
 - click ledger-edit
+- see edit-dialog
+- see edit-delete
 - click edit-delete
+- notSee edit-dialog
 - notSee ledger-entry

@@ -298,6 +298,13 @@ describe('editing a filed pomo', () => {
 		expect(draftError({ ...draftOf(pomo), end: 'noon' })).toMatch(/end time/)
 		expect(draftError({ ...draftOf(pomo), end: '2026-09-07T11:00' })).toMatch(/before it started/)
 	})
+	it('will not reopen a pomo while another one is in progress', () => {
+		const reopened = { ...draftOf(pomo), end: '' }
+		expect(draftError(reopened)).toBe(null)
+		expect(draftError(reopened, true)).toMatch(/already in progress/)
+		// an edit that leaves the pomo finished is unaffected by the open one
+		expect(draftError(draftOf(pomo), true)).toBe(null)
+	})
 	it('sorts a moved pomo back into the ledger by when it started', () => {
 		const earlier = pomoAt(noon - 3 * 3_600_000, 25 * 60_000)
 		expect([pomo, earlier].sort(byStart).map((p) => p.id)).toEqual([earlier.id, pomo.id])

@@ -534,6 +534,7 @@ function PomodancePage() {
 			{editing && (
 				<EditPomoDialog
 					pomo={editing}
+					otherInProgress={current !== null && current.id !== editing.id}
 					onDismiss={() => setEditing(null)}
 					onSave={(edited) => {
 						setPomos((ps) => ps.map((p) => (p.id === edited.id ? edited : p)).sort(byStart))
@@ -1129,18 +1130,21 @@ function ReviewDialog({
 
 function EditPomoDialog({
 	pomo,
+	otherInProgress,
 	onSave,
 	onDelete,
 	onDismiss,
 }: {
 	pomo: Pomo
+	otherInProgress: boolean
 	onSave: (pomo: Pomo) => void
 	onDelete: () => void
 	onDismiss: () => void
 }) {
 	const [draft, setDraft] = useState<PomoDraft>(() => draftOf(pomo))
 	const set = (patch: Partial<PomoDraft>) => setDraft((d) => ({ ...d, ...patch }))
-	const error = draftError(draft)
+	const error = draftError(draft, otherInProgress)
+	const inProgress = pomo.end === null
 
 	return (
 		<Modal testId="edit-dialog" onDismiss={onDismiss}>
@@ -1198,15 +1202,21 @@ function EditPomoDialog({
 				</p>
 			)}
 			<div className="modal-action justify-between">
-				<button
-					type="button"
-					data-testid="edit-delete"
-					id="edit-delete"
-					className="btn btn-outline btn-error"
-					onClick={onDelete}
-				>
-					Delete it
-				</button>
+				{inProgress ? (
+					<p data-testid="edit-delete-blocked" className="max-w-2xs text-xs opacity-70">
+						This one is still going. Stop the timer, then delete the finished entry.
+					</p>
+				) : (
+					<button
+						type="button"
+						data-testid="edit-delete"
+						id="edit-delete"
+						className="btn btn-outline btn-error"
+						onClick={onDelete}
+					>
+						Delete it
+					</button>
+				)}
 				<div className="flex gap-2">
 					<button type="button" id="edit-cancel" className="btn btn-ghost" onClick={onDismiss}>
 						Cancel

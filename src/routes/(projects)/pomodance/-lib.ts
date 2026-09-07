@@ -185,12 +185,17 @@ export const draftOf = (pomo: Pomo): PomoDraft => ({
 	confirmed: pomo.confirmed,
 })
 
-/** What is wrong with the draft, or null when it can be filed. */
-export function draftError(draft: PomoDraft): string | null {
+/**
+ * What is wrong with the draft, or null when it can be filed. An empty end
+ * reopens the pomo, which only one of them may be at a time: `otherOpen` is
+ * whether a different pomo is already in progress.
+ */
+export function draftError(draft: PomoDraft, otherOpen = false): string | null {
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(draft.day)) return 'The work day needs to be a date.'
 	const start = Date.parse(draft.start)
 	if (Number.isNaN(start)) return 'That start time is not a time.'
-	if (!draft.end) return null
+	if (!draft.end)
+		return otherOpen ? 'Another pomo is already in progress. Stop that one first.' : null
 	const end = Date.parse(draft.end)
 	if (Number.isNaN(end)) return 'That end time is not a time.'
 	return end < start ? 'That pomo would end before it started.' : null
