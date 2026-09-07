@@ -28,7 +28,11 @@ function Contact() {
 			</p>
 			<p className="font-ui text-base-content/60 mt-2 text-sm">
 				Prefer email? Reach us at{' '}
-				<a href={`mailto:${company.email}`} className="text-neutral hover:underline">
+				<a
+					href={`mailto:${company.email}`}
+					id="contact-email-link"
+					className="text-neutral hover:underline"
+				>
 					{company.email}
 				</a>
 				.

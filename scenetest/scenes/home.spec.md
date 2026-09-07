@@ -25,3 +25,13 @@ visitor:
 - click hero-contact-link
 - see contact-page
 - see contact-form
+
+# visitor can get to the contact page from the closing call to action
+
+visitor:
+
+- openTo /
+- see projects
+- click cta-contact-link
+- see contact-page
+- see contact-form

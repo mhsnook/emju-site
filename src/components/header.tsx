@@ -11,6 +11,7 @@ export function Header() {
 			<div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-5 py-4">
 				<Link
 					to="/"
+					id="site-home-link"
 					aria-label="EMJU home"
 					className="font-display text-base-content text-2xl tracking-tight"
 				>
@@ -31,7 +32,12 @@ export function Header() {
 							</li>
 						))*/}
 					</ul>
-					<Link to="/contact" data-testid="header-contact-link" className="btn btn-primary">
+					<Link
+						to="/contact"
+						id="header-contact-link"
+						data-testid="header-contact-link"
+						className="btn btn-primary"
+					>
 						Get in touch
 					</Link>
 				</nav>

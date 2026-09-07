@@ -35,7 +35,7 @@
 		-4px -4px 0 #2ec4b6;
 }
 
-.pomo.is-break .pomo-video-main {
+.pomo.is-break .pomo-video-main .pomo-video-stage {
 	animation: pomo-tilt 1.2s ease-in-out infinite alternate;
 }
 
@@ -127,7 +127,7 @@
 	text-shadow: none;
 }
 
-.pomo.is-break.is-calm .pomo-video-main,
+.pomo.is-break.is-calm .pomo-video-main .pomo-video-stage,
 .pomo.is-calm .pomo-dancers span {
 	animation: none;
 }
@@ -135,7 +135,7 @@
 @media (prefers-reduced-motion: reduce) {
 	.pomo.is-break::before,
 	.pomo.is-break .pomo-clock,
-	.pomo.is-break .pomo-video-main,
+	.pomo.is-break .pomo-video-main .pomo-video-stage,
 	.pomo-dancers span {
 		animation: none;
 	}

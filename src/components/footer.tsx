@@ -18,16 +18,32 @@ export function Footer() {
 					</div>
 
 					<nav aria-label="Footer" className="font-ui flex min-w-40 flex-col gap-2">
-						<a href="/#services" className="text-base-content/70 hover:text-base-content">
+						<a
+							href="/#services"
+							id="footer-services-link"
+							className="text-base-content/70 hover:text-base-content"
+						>
 							Services
 						</a>
-						<a href="/#projects" className="text-base-content/70 hover:text-base-content">
+						<a
+							href="/#projects"
+							id="footer-projects-link"
+							className="text-base-content/70 hover:text-base-content"
+						>
 							Projects
 						</a>
-						<a href="/#potentials" className="text-base-content/70 hover:text-base-content">
+						<a
+							href="/#potentials"
+							id="footer-potentials-link"
+							className="text-base-content/70 hover:text-base-content"
+						>
 							Project ideas
 						</a>
-						<Link to="/contact" className="text-base-content/70 hover:text-base-content">
+						<Link
+							to="/contact"
+							id="footer-contact-link"
+							className="text-base-content/70 hover:text-base-content"
+						>
 							Contact
 						</Link>
 					</nav>

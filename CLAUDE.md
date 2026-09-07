@@ -52,6 +52,13 @@ just `/<name>`.
   folder. E2E scenes: `scenetest/scenes/*.spec.md`.
 - After a fresh `openTo`, allow for hydration before clicking handler-driven controls (the
   contact scene uses a short `wait`).
+- **Give every focusable control a unique `id`.** Scenes rotate actors between pointer and
+  keyboard navigation, and a keyboard actor reaches its target by pressing Tab. To notice a
+  target it can never reach, scenetest compares the focused element's `tagName + id` against
+  where it started — so controls without an `id` all collapse to the same identity (`A`,
+  `BUTTON`), and a page whose first focusable shares a tag with a later one trips that check
+  before it arrives. The `id`s on the nav, footer, hero and pomodance controls are load-
+  bearing for that reason; dropping one can fail a scene that never mentions it.
 
 ## Gate before committing
 

@@ -48,7 +48,12 @@ function Hero() {
 			</h1>
 			<p className="text-base-content/75 mt-6 max-w-2xl text-lg leading-relaxed">{hero.body}</p>
 			<div className="font-ui mt-9 flex flex-wrap items-center gap-3">
-				<Link to="/contact" data-testid="hero-contact-link" className="btn btn-primary">
+				<Link
+					to="/contact"
+					id="hero-contact-link"
+					data-testid="hero-contact-link"
+					className="btn btn-primary"
+				>
 					{hero.primaryCta.label}
 					<ArrowRight className="size-4" />
 				</Link>
@@ -138,6 +143,7 @@ function Projects() {
 						{project.url ? (
 							<a
 								href={project.url}
+								id={`project-link-${project.name}`}
 								target="_blank"
 								rel="noreferrer"
 								className="font-ui text-neutral mt-4 inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
@@ -148,6 +154,7 @@ function Projects() {
 						) : (
 							<Link
 								to="/contact"
+								id={`project-contact-${project.name}`}
 								className="font-ui text-neutral mt-4 inline-flex items-center gap-1.5 text-sm font-medium hover:underline"
 							>
 								Get in touch
@@ -238,6 +245,7 @@ function ContactCta() {
 				<p className="text-neutral-content/80 mt-3 max-w-xl leading-relaxed">{contact.body}</p>
 				<Link
 					to="/contact"
+					id="cta-contact-link"
 					data-testid="cta-contact-link"
 					className="btn btn-primary font-ui mt-7"
 				>

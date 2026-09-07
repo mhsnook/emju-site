@@ -573,6 +573,8 @@ function PomodancePage() {
 					<div className="modal-action">
 						<button
 							type="button"
+							id="settings-done"
+							data-testid="settings-done"
 							className="btn btn-primary"
 							onClick={() => setShowSettings(false)}
 						>
@@ -921,7 +923,7 @@ function PhaseVideo({
 				{videos.length > 1 && ` · ${pos + 1}/${videos.length}`}
 				{active && ' · now playing'}
 			</span>
-			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
+			<div className="pomo-video-stage aspect-video w-full overflow-hidden rounded-lg bg-black/40">
 				{videoId ? (
 					<VideoFrame
 						videoId={videoId}
@@ -968,6 +970,7 @@ function PhaseVideo({
 									{i === pos ? '▶' : '▷'}
 								</button>
 								<a
+									id={`${phase}-playlist-track-${i}`}
 									href={`https://www.youtube.com/watch?v=${id}`}
 									target="_blank"
 									rel="noreferrer"

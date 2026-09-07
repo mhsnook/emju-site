@@ -26,7 +26,8 @@ visitor:
 - see settings-dialog
 - click ledger-toggle
 - click ledger-toggle
-- click settings-button
+- click settings-done
+- notSee settings-dialog
 - see ledger
 - click break-playlist-toggle
 - see break-playlist-input
