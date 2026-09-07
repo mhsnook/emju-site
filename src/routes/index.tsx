@@ -178,10 +178,7 @@ function Potentials() {
 			data-testid="potentials"
 			className="mx-auto max-w-5xl scroll-mt-20 px-5 py-16"
 		>
-			<SectionHeading
-				eyebrow="Project ideas"
-				title="What if we tried..."
-			/>
+			<SectionHeading eyebrow="Project ideas" title="What if we tried..." />
 			<div className="mt-10 grid items-start gap-8 md:grid-cols-2">
 				<ul
 					role="listbox"
