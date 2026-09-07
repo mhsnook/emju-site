@@ -5,27 +5,34 @@ import remarkGfm from 'remark-gfm'
 
 import { pomodance as copy } from '#/content/site'
 import {
+	cachedVideoTitle,
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
+	fetchVideoTitle,
 	formatClock,
+	loadCursors,
 	loadDay,
 	loadIntention,
-	loadLedgerHidden,
 	loadPomos,
 	loadSettings,
 	loadYouTubeApi,
 	MIN_POMO_MS,
+	MINUTES_KEY,
 	msFor,
 	parseVideoId,
+	saveCursors,
 	saveDay,
 	saveIntention,
-	saveLedgerHidden,
 	savePomos,
 	saveSettings,
 	sounds,
 	straddlesRollover,
+	trackAt,
+	trackPos,
+	VIDEOS_KEY,
 	workDayOf,
+	type Cursors,
 	type Phase,
 	type Pomo,
 	type Settings,
@@ -73,8 +80,11 @@ const minutesBetween = (a: string, b: string) =>
 	Math.round((Date.parse(b) - Date.parse(a)) / 60_000)
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
+const PROGRESS_SAVE_MS = 5_000
+
 function PomodancePage() {
 	const [settings, setSettings] = useState<Settings>(loadSettings)
+	const [cursors, setCursors] = useState<Cursors>(loadCursors)
 	const [timer, dispatch] = useReducer(timerReducer, {
 		phase: 'work',
 		endsAt: null,
@@ -84,11 +94,11 @@ function PomodancePage() {
 	const [intention, setIntention] = useState(loadIntention)
 	const [pomos, setPomos] = useState(() => loadPomos(settings.workMinutes))
 	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
-	const [ledgerHidden, setLedgerHidden] = useState(loadLedgerHidden)
 
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
 	const [askRollover, setAskRollover] = useState(false)
+	const [showSettings, setShowSettings] = useState(false)
 
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
 	const [playersReady, setPlayersReady] = useState(0)
@@ -101,6 +111,7 @@ function PomodancePage() {
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
+	useEffect(() => saveCursors(cursors), [cursors])
 
 	const patchPomo = (id: string, patch: Partial<Pomo>) =>
 		setPomos((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -173,6 +184,30 @@ function PomodancePage() {
 		return () => clearInterval(id)
 	}, [timer.endsAt])
 
+	// A paused player keeps its own position, so resuming a phase needs no help.
+	// The stored seconds are for the next page load.
+	const captureProgress = (p: Phase) => {
+		const player = players.current[p]
+		const YT = window.YT
+		if (!player || !YT) return
+		try {
+			const state = player.getPlayerState()
+			if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.PAUSED) return
+			const seconds = Math.max(0, Math.floor(player.getCurrentTime()))
+			setCursors((c) => (c[p].seconds === seconds ? c : { ...c, [p]: { ...c[p], seconds } }))
+		} catch {
+			/* player went away mid-read */
+		}
+	}
+	const captureRef = useRef(captureProgress)
+	captureRef.current = captureProgress
+
+	useEffect(() => {
+		if (!running) return
+		const id = setInterval(() => captureRef.current(phase), PROGRESS_SAVE_MS)
+		return () => clearInterval(id)
+	}, [running, phase])
+
 	// the players follow the timer; only the active phase's player may drive it back.
 	// pressing play on the other one is a request to switch phases, so it gets
 	// paused again and routed through the confirm dialog.
@@ -181,12 +216,25 @@ function PomodancePage() {
 			const player = players.current[p]
 			if (!player) continue
 			if (p === phase && running) player.playVideo()
-			else player.pauseVideo()
+			else {
+				captureRef.current(p)
+				player.pauseVideo()
+			}
 		}
 	}, [phase, running, playersReady])
 
+	const advanceTrack = (p: Phase) =>
+		setCursors((c) => ({ ...c, [p]: { index: c[p].index + 1, seconds: 0 } }))
+
+	const selectTrack = (p: Phase, index: number) =>
+		setCursors((c) => ({ ...c, [p]: { index, seconds: 0 } }))
+
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
+		if (state === YT.PlayerState.ENDED) {
+			advanceTrack(p)
+			return
+		}
 		if (p !== phase) {
 			if (state !== YT.PlayerState.PLAYING) return
 			if (running) {
@@ -215,6 +263,9 @@ function PomodancePage() {
 		if (idle) switchTo(phase, false, next)
 	}
 
+	const updatePlaylist = (p: Phase, videos: string[]) =>
+		updateSettings({ [VIDEOS_KEY[p]]: videos })
+
 	const updateIntention = (value: string) => {
 		setIntention(value)
 		saveIntention(value)
@@ -227,11 +278,6 @@ function PomodancePage() {
 		setReview(null)
 	}
 
-	const toggleLedger = () => {
-		setLedgerHidden(!ledgerHidden)
-		saveLedgerHidden(!ledgerHidden)
-	}
-
 	const clock = formatClock(running ? secondsLeft : Math.ceil(timer.remainingMs / 1000))
 
 	useEffect(() => {
@@ -239,20 +285,33 @@ function PomodancePage() {
 	}, [clock, isBreak])
 
 	const today = workDayOf(new Date())
+	const showLedger = !settings.ledgerHidden
 
 	return (
 		<div
 			data-testid="pomodance-page"
 			data-theme="emju-dark"
-			className={cn('pomo', isBreak && 'is-break')}
+			className={cn('pomo', isBreak && 'is-break', settings.lessMotion && 'is-calm')}
 		>
-			<div className={cn('grid gap-6 p-6', !ledgerHidden && 'lg:grid-cols-[1fr_20rem]')}>
+			<div className={cn('grid gap-6 p-6', showLedger && 'lg:grid-cols-[1fr_20rem]')}>
 				<div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-					<header className="flex flex-wrap items-baseline justify-between gap-4">
-						<h1 className="font-display text-3xl">
-							{isBreak ? copy.breakHeading : copy.workHeading}
-						</h1>
-						<p className="font-ui text-sm opacity-70">{copy.description}</p>
+					<header className="flex items-start justify-between gap-4">
+						<div className="flex flex-col gap-1">
+							<h1 className="font-display text-3xl">
+								{isBreak ? copy.breakHeading : copy.workHeading}
+							</h1>
+							<p className="font-ui text-sm opacity-70">{copy.description}</p>
+						</div>
+						<button
+							type="button"
+							data-testid="settings-button"
+							aria-label={copy.settings.open}
+							title={copy.settings.open}
+							onClick={() => setShowSettings(true)}
+							className="btn btn-circle btn-ghost shrink-0 text-xl"
+						>
+							⚙
+						</button>
 					</header>
 
 					{isBreak && (
@@ -304,77 +363,72 @@ function PomodancePage() {
 						/>
 					</section>
 
-					<section className="grid gap-4 md:grid-cols-3">
-						<VideoSlot
-							testId="work-video"
-							videoId={parseVideoId(settings.workVideo)}
-							active={!isBreak}
-							label="work & chill"
-							onReady={(p) => registerPlayer('work', p)}
-							onState={(s) => onPlayerStateRef.current('work', s)}
-						/>
-						<VideoSlot
-							testId="break-video"
-							videoId={parseVideoId(settings.breakVideo)}
-							active={isBreak}
-							label="break time"
-							onReady={(p) => registerPlayer('break', p)}
-							onState={(s) => onPlayerStateRef.current('break', s)}
-						/>
+					<section className="grid items-start gap-4 md:grid-cols-3">
+						{PHASES.map((p) => (
+							<PhaseVideo
+								key={p}
+								phase={p}
+								active={phase === p}
+								playing={phase === p && running}
+								videos={settings[VIDEOS_KEY[p]]}
+								cursor={cursors[p]}
+								onPlaylistChange={(videos) => updatePlaylist(p, videos)}
+								onSelectTrack={(i) => selectTrack(p, i)}
+								onReady={(player) => registerPlayer(p, player)}
+								onState={(s) => onPlayerStateRef.current(p, s)}
+							/>
+						))}
 					</section>
-
-					<div className="font-ui flex justify-between text-sm">
-						<details data-testid="settings" className="opacity-80 open:opacity-100">
-							<summary className="cursor-pointer">Settings</summary>
-							<div className="mt-3 grid gap-3 sm:grid-cols-2">
-								<SettingInput
-									testId="work-video-input"
-									label="Work video (youtube url or id)"
-									value={settings.workVideo}
-									onChange={(v) => updateSettings({ workVideo: v })}
-								/>
-								<SettingInput
-									testId="break-video-input"
-									label="Break video (youtube url or id)"
-									value={settings.breakVideo}
-									onChange={(v) => updateSettings({ breakVideo: v })}
-								/>
-								<SettingInput
-									testId="work-minutes-input"
-									label="Work minutes"
-									type="number"
-									value={String(settings.workMinutes)}
-									onChange={(v) =>
-										updateSettings({
-											workMinutes: clampMinutes(v, DEFAULT_SETTINGS.workMinutes),
-										})
-									}
-								/>
-								<SettingInput
-									testId="break-minutes-input"
-									label="Break minutes"
-									type="number"
-									value={String(settings.breakMinutes)}
-									onChange={(v) =>
-										updateSettings({
-											breakMinutes: clampMinutes(v, DEFAULT_SETTINGS.breakMinutes),
-										})
-									}
-								/>
-							</div>
-						</details>
-						<button
-							data-testid="ledger-toggle"
-							onClick={toggleLedger}
-							className="btn btn-ghost btn-sm"
-						>
-							{ledgerHidden ? 'Show ledger' : 'Hide ledger'}
-						</button>
-					</div>
 				</div>
 
-				{!ledgerHidden && <Ledger pomos={pomos} day={day} />}
+				{showLedger && <Ledger pomos={pomos} day={day} />}
 			</div>
+
+			{showSettings && (
+				<Modal testId="settings-dialog" onDismiss={() => setShowSettings(false)}>
+					<h2 className="font-display text-2xl">{copy.settings.title}</h2>
+					<div className="grid gap-3 sm:grid-cols-2">
+						{PHASES.map((p) => (
+							<SettingInput
+								key={p}
+								testId={`${p}-minutes-input`}
+								label={
+									p === 'work' ? copy.settings.workMinutes : copy.settings.breakMinutes
+								}
+								type="number"
+								value={String(settings[MINUTES_KEY[p]])}
+								onChange={(v) =>
+									updateSettings({
+										[MINUTES_KEY[p]]: clampMinutes(v, DEFAULT_SETTINGS[MINUTES_KEY[p]]),
+									})
+								}
+							/>
+						))}
+					</div>
+					<Toggle
+						testId="ledger-toggle"
+						label={copy.settings.showLedger}
+						checked={showLedger}
+						onChange={(v) => updateSettings({ ledgerHidden: !v })}
+					/>
+					<Toggle
+						testId="less-motion-toggle"
+						label={copy.settings.lessMotion}
+						hint={copy.settings.lessMotionHint}
+						checked={settings.lessMotion}
+						onChange={(v) => updateSettings({ lessMotion: v })}
+					/>
+					<div className="modal-action">
+						<button
+							type="button"
+							className="btn btn-primary"
+							onClick={() => setShowSettings(false)}
+						>
+							{copy.settings.close}
+						</button>
+					</div>
+				</Modal>
+			)}
 
 			{review && (
 				<ReviewDialog
@@ -484,71 +538,269 @@ function SettingInput({
 	)
 }
 
-function VideoSlot({
+function Toggle({
 	testId,
-	videoId,
-	active,
 	label,
+	hint,
+	checked,
+	onChange,
+}: {
+	testId: string
+	label: string
+	hint?: string
+	checked: boolean
+	onChange: (v: boolean) => void
+}) {
+	return (
+		<label className="font-ui flex cursor-pointer items-start gap-3 text-sm">
+			<input
+				data-testid={testId}
+				type="checkbox"
+				checked={checked}
+				onChange={(e) => onChange(e.target.checked)}
+				className="toggle toggle-primary"
+			/>
+			<span className="flex flex-col">
+				<span>{label}</span>
+				{hint && <span className="opacity-60">{hint}</span>}
+			</span>
+		</label>
+	)
+}
+
+/** Titles are a nicety: until (or unless) one arrives, the id stands in for it. */
+function useVideoTitles(ids: string[]) {
+	const [, bump] = useReducer((n: number) => n + 1, 0)
+	const key = ids.join(',')
+	useEffect(() => {
+		let cancelled = false
+		void Promise.all(key ? key.split(',').map(fetchVideoTitle) : []).then(
+			() => !cancelled && bump()
+		)
+		return () => {
+			cancelled = true
+		}
+	}, [key])
+	return (id: string) => cachedVideoTitle(id) ?? id
+}
+
+function PhaseVideo({
+	phase,
+	active,
+	playing,
+	videos,
+	cursor,
+	onPlaylistChange,
+	onSelectTrack,
 	onReady,
 	onState,
 }: {
-	testId: string
-	videoId: string
+	phase: Phase
 	active: boolean
-	label: string
+	playing: boolean
+	videos: string[]
+	cursor: { index: number; seconds: number }
+	onPlaylistChange: (videos: string[]) => void
+	onSelectTrack: (index: number) => void
 	onReady: (p: YTPlayer | null) => void
 	onState: (state: number) => void
 }) {
-	const mount = useRef<HTMLDivElement>(null)
-	const callbacks = useRef({ onReady, onState })
-	callbacks.current = { onReady, onState }
+	const [draft, setDraft] = useState('')
+	const [invalid, setInvalid] = useState(false)
+	const titleOf = useVideoTitles(videos)
 
-	useEffect(() => {
-		if (!videoId || !mount.current) return
-		let player: YTPlayer | null = null
-		let cancelled = false
-		const host = document.createElement('div')
-		mount.current.replaceChildren(host)
-		void loadYouTubeApi().then((YT) => {
-			if (cancelled) return
-			player = new YT.Player(host, {
-				videoId,
-				playerVars: { loop: 1, playlist: videoId, rel: 0, playsinline: 1 },
-				events: {
-					onReady: () => callbacks.current.onReady(player),
-					onStateChange: (e) => callbacks.current.onState(e.data),
-				},
-			})
-		})
-		return () => {
-			cancelled = true
-			callbacks.current.onReady(null)
-			player?.destroy()
-		}
-	}, [videoId])
+	const pos = trackPos(videos.length, cursor.index)
+	const videoId = trackAt(videos, cursor.index)
+	const heading = phase === 'work' ? copy.playlist.work : copy.playlist.break
+
+	const add = () => {
+		const id = parseVideoId(draft)
+		if (!id) return setInvalid(true)
+		setInvalid(false)
+		setDraft('')
+		onPlaylistChange([...videos, id])
+	}
+
+	const remove = (i: number) => onPlaylistChange(videos.filter((_, n) => n !== i))
 
 	return (
 		<div
-			data-testid={testId}
+			data-testid={`${phase}-video`}
 			className={cn(
 				'flex flex-col gap-2 transition-all',
 				active ? 'pomo-video-main md:col-span-2' : 'opacity-60 hover:opacity-100 md:col-span-1'
 			)}
 		>
 			<span className="font-ui text-xs tracking-wide uppercase opacity-70">
-				{label} {active && '· now playing'}
+				{heading} {videos.length > 1 && `· ${pos + 1}/${videos.length}`}
+				{active && ' · now playing'}
 			</span>
 			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
 				{videoId ? (
-					<div ref={mount} className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
+					<VideoFrame
+						videoId={videoId}
+						trackKey={`${cursor.index}:${videoId}`}
+						startSeconds={cursor.seconds}
+						autoplay={playing}
+						onReady={onReady}
+						onState={onState}
+					/>
 				) : (
-					<p className="p-4 text-sm opacity-70">
-						Paste a youtube link for the {label} video in settings.
-					</p>
+					<p className="p-4 text-sm opacity-70">{copy.playlist.empty}</p>
 				)}
 			</div>
+
+			<details
+				data-testid={`${phase}-playlist`}
+				className="font-ui text-sm opacity-80 open:opacity-100"
+			>
+				<summary data-testid={`${phase}-playlist-toggle`} className="cursor-pointer">
+					{copy.playlist.summary} ({videos.length})
+				</summary>
+				<div className="mt-2 flex flex-col gap-2">
+					<ol className="flex flex-col gap-1">
+						{videos.map((id, i) => (
+							<li key={`${id}-${i}`} className="flex items-center gap-2">
+								<button
+									type="button"
+									data-testid={`${phase}-playlist-play-${i}`}
+									title={copy.playlist.play}
+									aria-label={`${copy.playlist.play}: ${titleOf(id)}`}
+									onClick={() => onSelectTrack(i)}
+									className={cn(
+										'btn btn-ghost btn-xs',
+										i === pos && 'text-[var(--pomo-accent)]'
+									)}
+								>
+									{i === pos ? '▶' : '▷'}
+								</button>
+								<a
+									href={`https://www.youtube.com/watch?v=${id}`}
+									target="_blank"
+									rel="noreferrer"
+									className="link link-hover flex-1 truncate"
+								>
+									{titleOf(id)}
+								</a>
+								<button
+									type="button"
+									data-testid={`${phase}-playlist-remove-${i}`}
+									aria-label={`${copy.playlist.remove}: ${titleOf(id)}`}
+									title={copy.playlist.remove}
+									onClick={() => remove(i)}
+									className="btn btn-ghost btn-xs"
+								>
+									✕
+								</button>
+							</li>
+						))}
+					</ol>
+					<form
+						className="flex gap-2"
+						onSubmit={(e) => {
+							e.preventDefault()
+							add()
+						}}
+					>
+						<input
+							data-testid={`${phase}-playlist-input`}
+							value={draft}
+							placeholder={copy.playlist.add}
+							onChange={(e) => {
+								setDraft(e.target.value)
+								setInvalid(false)
+							}}
+							className="input input-sm flex-1"
+						/>
+						<button
+							type="submit"
+							data-testid={`${phase}-playlist-add`}
+							className="btn btn-sm"
+						>
+							{copy.playlist.addAction}
+						</button>
+					</form>
+					{invalid && <p className="text-error text-xs">{copy.playlist.invalid}</p>}
+					<p className="text-xs opacity-60">{copy.playlist.hint}</p>
+				</div>
+			</details>
 		</div>
 	)
+}
+
+function VideoFrame({
+	videoId,
+	trackKey,
+	startSeconds,
+	autoplay,
+	onReady,
+	onState,
+}: {
+	videoId: string
+	trackKey: string
+	startSeconds: number
+	autoplay: boolean
+	onReady: (p: YTPlayer | null) => void
+	onState: (state: number) => void
+}) {
+	const mount = useRef<HTMLDivElement>(null)
+	const player = useRef<YTPlayer | null>(null)
+	const loaded = useRef<string | null>(null)
+	const [ready, setReady] = useState(false)
+
+	const latest = useRef({ videoId, trackKey, startSeconds, autoplay, onReady, onState })
+	latest.current = { videoId, trackKey, startSeconds, autoplay, onReady, onState }
+
+	// One player per phase for the life of the page; tracks are swapped into it
+	// below, because tearing the iframe down between songs loses the API handle.
+	useEffect(() => {
+		if (!mount.current) return
+		let created: YTPlayer | null = null
+		let cancelled = false
+		const host = document.createElement('div')
+		mount.current.replaceChildren(host)
+		const initial = latest.current
+		loaded.current = initial.trackKey
+		void loadYouTubeApi().then((YT) => {
+			if (cancelled) return
+			created = new YT.Player(host, {
+				videoId: initial.videoId,
+				playerVars: {
+					rel: 0,
+					playsinline: 1,
+					start: Math.floor(initial.startSeconds),
+				},
+				events: {
+					onReady: () => {
+						player.current = created
+						setReady(true)
+						latest.current.onReady(created)
+					},
+					onStateChange: (e) => latest.current.onState(e.data),
+				},
+			})
+		})
+		return () => {
+			cancelled = true
+			player.current = null
+			loaded.current = null
+			setReady(false)
+			latest.current.onReady(null)
+			created?.destroy()
+		}
+	}, [])
+
+	useEffect(() => {
+		if (!ready || loaded.current === trackKey) return
+		loaded.current = trackKey
+		const { videoId: id, startSeconds: at, autoplay: play } = latest.current
+		if (!id) return
+		const request = { videoId: id, startSeconds: Math.floor(at) }
+		if (play) player.current?.loadVideoById(request)
+		else player.current?.cueVideoById(request)
+	}, [trackKey, ready])
+
+	return <div ref={mount} className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
 }
 
 function Modal({

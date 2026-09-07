@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatClock, parseVideoId, straddlesRollover, workDayOf, type Pomo } from './pomodance'
+import {
+	DEFAULT_SETTINGS,
+	formatClock,
+	normalizeSettings,
+	parseVideoId,
+	straddlesRollover,
+	trackAt,
+	trackPos,
+	workDayOf,
+	type Pomo,
+} from './pomodance'
 
 describe('parseVideoId', () => {
 	it('accepts bare ids and the usual url shapes', () => {
@@ -52,5 +62,41 @@ describe('formatClock', () => {
 		expect(formatClock(1500)).toBe('25:00')
 		expect(formatClock(61)).toBe('01:01')
 		expect(formatClock(-5)).toBe('00:00')
+	})
+})
+
+describe('trackPos', () => {
+	it('wraps back to the start of the playlist', () => {
+		expect(trackPos(3, 0)).toBe(0)
+		expect(trackPos(3, 4)).toBe(1)
+		expect(trackPos(1, 7)).toBe(0)
+		expect(trackPos(0, 2)).toBe(-1)
+	})
+	it('reads a track out of the list, or nothing from an empty one', () => {
+		expect(trackAt(['a', 'b', 'c'], 4)).toBe('b')
+		expect(trackAt([], 0)).toBe('')
+	})
+})
+
+describe('normalizeSettings', () => {
+	it('falls back to the defaults for anything missing', () => {
+		expect(normalizeSettings(null)).toEqual(DEFAULT_SETTINGS)
+		expect(normalizeSettings({ workMinutes: 50 }).workMinutes).toBe(50)
+	})
+	it('lifts the single-video settings of older saves into playlists', () => {
+		const s = normalizeSettings({
+			workVideo: 'https://youtu.be/jfKfPfyJRdk',
+			breakVideo: 'FGBhQbmPwH8',
+		})
+		expect(s.workVideos).toEqual(['jfKfPfyJRdk'])
+		expect(s.breakVideos).toEqual(['FGBhQbmPwH8'])
+	})
+	it('reduces playlist entries to ids and drops the unplayable ones', () => {
+		const s = normalizeSettings({
+			workVideos: ['https://www.youtube.com/watch?v=jfKfPfyJRdk', 'nope', 42],
+			breakVideos: [],
+		})
+		expect(s.workVideos).toEqual(['jfKfPfyJRdk'])
+		expect(s.breakVideos).toEqual([])
 	})
 })

@@ -1,11 +1,17 @@
 export type Phase = 'work' | 'break'
 
 export type Settings = {
-	workVideo: string
-	breakVideo: string
+	workVideos: string[]
+	breakVideos: string[]
 	workMinutes: number
 	breakMinutes: number
+	ledgerHidden: boolean
+	lessMotion: boolean
 }
+
+/** Where a phase's playlist is parked: which track, and how far into it. */
+export type Cursor = { index: number; seconds: number }
+export type Cursors = Record<Phase, Cursor>
 
 export type Pomo = {
 	id: string
@@ -22,14 +28,25 @@ const SETTINGS_KEY = 'pomodance:settings'
 const POMOS_KEY = 'pomodance:pomos'
 const INTENTION_KEY = 'pomodance:intention'
 const DAY_KEY = 'pomodance:day'
-const LEDGER_KEY = 'pomodance:ledger-hidden'
+const CURSORS_KEY = 'pomodance:cursors'
+const LEGACY_LEDGER_KEY = 'pomodance:ledger-hidden'
 
 export const DEFAULT_SETTINGS: Settings = {
-	workVideo: 'jfKfPfyJRdk',
-	breakVideo: 'FGBhQbmPwH8',
+	workVideos: ['jfKfPfyJRdk'],
+	breakVideos: ['FGBhQbmPwH8', 'dQw4w9WgXcQ'],
 	workMinutes: 25,
 	breakMinutes: 5,
+	ledgerHidden: false,
+	lessMotion: false,
 }
+
+export const EMPTY_CURSORS: Cursors = {
+	work: { index: 0, seconds: 0 },
+	break: { index: 0, seconds: 0 },
+}
+
+export const VIDEOS_KEY = { work: 'workVideos', break: 'breakVideos' } as const
+export const MINUTES_KEY = { work: 'workMinutes', break: 'breakMinutes' } as const
 
 /** Pomos shorter than this are discarded rather than filed. */
 export const MIN_POMO_MS = 60_000
@@ -51,10 +68,38 @@ function write(key: string, value: unknown) {
 	localStorage.setItem(key, JSON.stringify(value))
 }
 
+/**
+ * Fills in defaults, lifts the single-video settings of older saves into lists,
+ * and reduces every entry to a bare video id so list positions and playable
+ * tracks are the same thing.
+ */
+export function normalizeSettings(stored: unknown): Settings {
+	const s = (stored ?? {}) as Partial<Settings> & { workVideo?: unknown; breakVideo?: unknown }
+	const list = (many: unknown, one: unknown, fallback: string[]) => {
+		const raw = Array.isArray(many) ? many : typeof one === 'string' ? [one] : null
+		if (!raw) return fallback
+		return raw
+			.filter((v) => typeof v === 'string')
+			.map(parseVideoId)
+			.filter(Boolean)
+	}
+	return {
+		...DEFAULT_SETTINGS,
+		...s,
+		workVideos: list(s.workVideos, s.workVideo, DEFAULT_SETTINGS.workVideos),
+		breakVideos: list(s.breakVideos, s.breakVideo, DEFAULT_SETTINGS.breakVideos),
+	}
+}
+
 export function loadSettings(): Settings {
-	return { ...DEFAULT_SETTINGS, ...read<Partial<Settings>>(SETTINGS_KEY, {}) }
+	const stored = read<Record<string, unknown>>(SETTINGS_KEY, {})
+	if (stored.ledgerHidden === undefined) stored.ledgerHidden = read(LEGACY_LEDGER_KEY, false)
+	return normalizeSettings(stored)
 }
 export const saveSettings = (settings: Settings) => write(SETTINGS_KEY, settings)
+
+export const loadCursors = (): Cursors => ({ ...EMPTY_CURSORS, ...read(CURSORS_KEY, {}) })
+export const saveCursors = (cursors: Cursors) => write(CURSORS_KEY, cursors)
 
 /** Any pomo left open by a closed tab gets ended at the earlier of now or its full length. */
 export function loadPomos(workMinutes: number): Pomo[] {
@@ -77,9 +122,6 @@ export const saveIntention = (v: string) => write(INTENTION_KEY, v)
 
 export const loadDay = () => read<string | null>(DAY_KEY, null)
 export const saveDay = (day: string) => write(DAY_KEY, day)
-
-export const loadLedgerHidden = () => read<boolean>(LEDGER_KEY, false)
-export const saveLedgerHidden = (v: boolean) => write(LEDGER_KEY, v)
 
 export function workDayOf(date: Date): string {
 	const shifted = new Date(date.getTime() - DAY_ROLLOVER_HOURS * 3_600_000)
@@ -125,8 +167,17 @@ export function parseVideoId(input: string): string {
 	return ''
 }
 
+/**
+ * A cursor index counts tracks played rather than position in the list, so that
+ * advancing past the end of a one-track playlist still reads as a change.
+ */
+export const trackPos = (length: number, index: number) =>
+	length > 0 ? ((index % length) + length) % length : -1
+
+export const trackAt = (ids: string[], index: number) => ids[trackPos(ids.length, index)] ?? ''
+
 export function msFor(settings: Settings, phase: Phase) {
-	return (phase === 'work' ? settings.workMinutes : settings.breakMinutes) * 60_000
+	return settings[MINUTES_KEY[phase]] * 60_000
 }
 
 export function formatClock(seconds: number) {
@@ -180,9 +231,15 @@ export const sounds = {
 
 // ---- youtube iframe api ----
 
+export type VideoRequest = { videoId: string; startSeconds?: number }
+
 export type YTPlayer = {
 	playVideo(): void
 	pauseVideo(): void
+	loadVideoById(request: VideoRequest): void
+	cueVideoById(request: VideoRequest): void
+	getCurrentTime(): number
+	getPlayerState(): number
 	destroy(): void
 }
 
@@ -198,7 +255,7 @@ type YTNamespace = {
 			}
 		}
 	) => YTPlayer
-	PlayerState: { PLAYING: number; PAUSED: number }
+	PlayerState: { ENDED: number; PLAYING: number; PAUSED: number; BUFFERING: number }
 }
 
 declare global {
@@ -224,6 +281,31 @@ export function loadYouTubeApi(): Promise<YTNamespace> {
 	})
 	return ytReady
 }
+
+// ---- video titles ----
+
+const titles = new Map<string, string>()
+
+/** Titles come from youtube's oembed endpoint; without one we just show the id. */
+export async function fetchVideoTitle(id: string): Promise<string | null> {
+	if (titles.has(id)) return titles.get(id)!
+	try {
+		const res = await fetch(
+			`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(
+				`https://www.youtube.com/watch?v=${id}`
+			)}`
+		)
+		if (!res.ok) return null
+		const { title } = (await res.json()) as { title?: string }
+		if (!title) return null
+		titles.set(id, title)
+		return title
+	} catch {
+		return null
+	}
+}
+
+export const cachedVideoTitle = (id: string) => titles.get(id) ?? null
 
 export function cn(...parts: Array<string | false | null | undefined>) {
 	return parts.filter(Boolean).join(' ')

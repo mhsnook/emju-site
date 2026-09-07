@@ -185,4 +185,26 @@ export const pomodance = {
 	rollover: {
 		title: "It's past 4am",
 	},
+	playlist: {
+		work: 'Work playlist',
+		break: 'Dance playlist',
+		summary: 'Playlist',
+		add: 'Paste a youtube link or id',
+		addAction: 'Add',
+		invalid: "That doesn't look like a youtube link.",
+		empty: 'No videos yet. Paste a youtube link to give this half of the timer a soundtrack.',
+		hint: 'Each switch picks up where this playlist left off, then rolls on to the next track.',
+		play: 'Play this one next',
+		remove: 'Remove',
+	},
+	settings: {
+		open: 'Settings',
+		title: 'Settings',
+		workMinutes: 'Work minutes',
+		breakMinutes: 'Break minutes',
+		showLedger: 'Show the ledger',
+		lessMotion: 'Less motion',
+		lessMotionHint: 'Calmer colours and no wobbling while the dance music plays.',
+		close: 'Done',
+	},
 } as const

@@ -112,6 +112,20 @@
 	}
 }
 
+/* less motion: hold the party still and drop it to one calm colour */
+.pomo.is-break.is-calm {
+	--pomo-accent: #ffd166;
+	background: #3b2a52;
+}
+
+.pomo.is-break.is-calm::before {
+	content: none;
+}
+
+.pomo.is-break.is-calm .pomo-clock {
+	text-shadow: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.pomo.is-break::before,
 	.pomo.is-break .pomo-clock,
@@ -119,4 +133,11 @@
 	.pomo-dancers span {
 		animation: none;
 	}
+}
+
+.pomo.is-calm.is-break::before,
+.pomo.is-calm.is-break .pomo-clock,
+.pomo.is-calm.is-break .pomo-video-main,
+.pomo.is-calm .pomo-dancers span {
+	animation: none;
 }
