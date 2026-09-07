@@ -1,7 +1,9 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+
+import { company } from '#/content/site'
 
 import {
 	cn,
@@ -33,12 +35,13 @@ import {
 	type Pomo,
 	type Settings,
 	type YTPlayer,
-} from '#/lib/pomodance'
+} from './-lib'
 
-import pomodanceCss from '#/pomodance.css?url'
+import pomodanceCss from './-styles.css?url'
 
-export const Route = createFileRoute('/pomodance')({
+export const Route = createFileRoute('/(projects)/pomodance/')({
 	ssr: false,
+	staticData: { bareLayout: true },
 	head: () => ({
 		meta: [{ title: `${TITLE} — EMJU` }, { name: 'description', content: DESCRIPTION }],
 		links: [{ rel: 'stylesheet', href: pomodanceCss }],
@@ -49,6 +52,13 @@ export const Route = createFileRoute('/pomodance')({
 const TITLE = 'Pomodance'
 const DESCRIPTION =
 	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
+
+const CREDITS = [
+	{ label: company.name, href: company.site },
+	{ label: 'mhsnook', href: 'https://github.com/mhsnook' },
+	{ label: 'MIT license', href: `${company.repo}/blob/main/LICENSE` },
+	{ label: 'see the code', href: `${company.repo}/tree/main/src/routes/(projects)/pomodance` },
+]
 
 const PHASES: Phase[] = ['work', 'break']
 const PLAYLIST_HEADING: Record<Phase, string> = {
@@ -292,9 +302,18 @@ function PomodancePage() {
 		<div
 			data-testid="pomodance-page"
 			data-theme="emju-dark"
-			className={cn('pomo', isBreak && 'is-break', settings.lessMotion && 'is-calm')}
+			className={cn(
+				'pomo flex min-h-screen flex-col',
+				isBreak && 'is-break',
+				settings.lessMotion && 'is-calm'
+			)}
 		>
-			<div className={cn('grid gap-6 p-6', settings.showLedger && 'lg:grid-cols-[1fr_20rem]')}>
+			<div
+				className={cn(
+					'grid flex-1 gap-6 p-6',
+					settings.showLedger && 'lg:grid-cols-[1fr_20rem]'
+				)}
+			>
 				<div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
 					<header className="flex items-start justify-between gap-4">
 						<div className="flex flex-col gap-1">
@@ -384,6 +403,8 @@ function PomodancePage() {
 
 				{settings.showLedger && <Ledger pomos={pomos} day={day} />}
 			</div>
+
+			<PomodanceFooter />
 
 			{showSettings && (
 				<Modal testId="settings-dialog" onDismiss={() => setShowSettings(false)}>
@@ -496,6 +517,27 @@ function PomodancePage() {
 				</Modal>
 			)}
 		</div>
+	)
+}
+
+function PomodanceFooter() {
+	return (
+		<footer
+			data-testid="pomodance-footer"
+			className="font-ui px-6 pb-6 text-center text-xs opacity-60"
+		>
+			<p>
+				<span>© {new Date().getFullYear()} </span>
+				{CREDITS.map((link, i) => (
+					<Fragment key={link.href}>
+						{i > 0 && <span aria-hidden> · </span>}
+						<a href={link.href} className="underline underline-offset-2">
+							{link.label}
+						</a>
+					</Fragment>
+				))}
+			</p>
+		</footer>
 	)
 }
 

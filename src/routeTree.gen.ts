@@ -11,7 +11,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ContactRouteImport } from './routes/contact'
-import { Route as PomodanceRouteImport } from './routes/pomodance'
+import { Route as projectsPomodanceIndexRouteImport } from './routes/(projects)/pomodance/index'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -23,40 +23,40 @@ const ContactRoute = ContactRouteImport.update({
   path: '/contact',
   getParentRoute: () => rootRouteImport,
 } as any)
-const PomodanceRoute = PomodanceRouteImport.update({
-  id: '/pomodance',
-  path: '/pomodance',
+const projectsPomodanceIndexRoute = projectsPomodanceIndexRouteImport.update({
+  id: '/(projects)/pomodance/',
+  path: '/pomodance/',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/contact': typeof ContactRoute
-  '/pomodance': typeof PomodanceRoute
+  '/pomodance/': typeof projectsPomodanceIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/contact': typeof ContactRoute
-  '/pomodance': typeof PomodanceRoute
+  '/pomodance': typeof projectsPomodanceIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/contact': typeof ContactRoute
-  '/pomodance': typeof PomodanceRoute
+  '/(projects)/pomodance/': typeof projectsPomodanceIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/contact' | '/pomodance'
+  fullPaths: '/' | '/contact' | '/pomodance/'
   fileRoutesByTo: FileRoutesByTo
   to: '/' | '/contact' | '/pomodance'
-  id: '__root__' | '/' | '/contact' | '/pomodance'
+  id: '__root__' | '/' | '/contact' | '/(projects)/pomodance/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ContactRoute: typeof ContactRoute
-  PomodanceRoute: typeof PomodanceRoute
+  projectsPomodanceIndexRoute: typeof projectsPomodanceIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -75,11 +75,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ContactRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/pomodance': {
-      id: '/pomodance'
+    '/(projects)/pomodance/': {
+      id: '/(projects)/pomodance/'
       path: '/pomodance'
-      fullPath: '/pomodance'
-      preLoaderRoute: typeof PomodanceRouteImport
+      fullPath: '/pomodance/'
+      preLoaderRoute: typeof projectsPomodanceIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -88,7 +88,7 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ContactRoute: ContactRoute,
-  PomodanceRoute: PomodanceRoute,
+  projectsPomodanceIndexRoute: projectsPomodanceIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
