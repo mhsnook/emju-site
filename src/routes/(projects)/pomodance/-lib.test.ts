@@ -350,9 +350,24 @@ describe('nextCursor', () => {
 		expect(playing(['a', 'b'], index)).toBe('a')
 		expect(restart).toBe(false)
 	})
-	it('starts the list from the top when nothing that was playing survived', () => {
+	it('plays what replaced the playing song, in its place', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['a', 'z', 'c'], 1)
+		expect(playing(['a', 'z', 'c'], index)).toBe('z')
+		expect(restart).toBe(true)
+	})
+	it('carries on when some other song in the list is the one edited', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['z', 'b', 'c'], 1)
+		expect(playing(['z', 'b', 'c'], index)).toBe('b')
+		expect(restart).toBe(false)
+	})
+	it('holds its place when the whole list is swapped for one the same length', () => {
 		const { index, restart } = nextCursor(['a', 'b'], ['x', 'y'], 1)
-		expect(playing(['x', 'y'], index)).toBe('x')
+		expect(playing(['x', 'y'], index)).toBe('y')
+		expect(restart).toBe(true)
+	})
+	it('starts from the top when nothing survived a list that also got shorter', () => {
+		const { index, restart } = nextCursor(['a', 'b'], ['x'], 1)
+		expect(playing(['x'], index)).toBe('x')
 		expect(restart).toBe(true)
 	})
 	it('starts from the top when the playlist was empty before', () => {

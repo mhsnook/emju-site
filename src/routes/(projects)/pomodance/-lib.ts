@@ -306,6 +306,10 @@ export function nextCursor(
 	const laps = Math.floor(index / after.length)
 	if (surviving >= 0) return { index: laps * after.length + surviving, restart: false }
 
+	// a list of the same length lost nothing, so the song at the cursor was
+	// edited rather than removed: play what replaced it, in its place
+	if (after.length === before.length) return { index: laps * after.length + pos, restart: true }
+
 	// the song is gone: take the next one along that is still in the list
 	for (let step = 1; step <= before.length; step++) {
 		const next = after.indexOf(before[(pos + step) % before.length])

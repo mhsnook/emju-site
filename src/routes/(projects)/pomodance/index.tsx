@@ -929,6 +929,9 @@ function PhaseVideo({
 }) {
 	const [draft, setDraft] = useState('')
 	const [invalid, setInvalid] = useState(false)
+	const [editingTrack, setEditingTrack] = useState<number | null>(null)
+	const [trackDraft, setTrackDraft] = useState('')
+	const [trackInvalid, setTrackInvalid] = useState(false)
 	const titleOf = useVideoTitles(videos)
 
 	const pos = trackPos(videos.length, index)
@@ -942,7 +945,23 @@ function PhaseVideo({
 		onPlaylistChange([...videos, id])
 	}
 
-	const remove = (i: number) => onPlaylistChange(videos.filter((_, n) => n !== i))
+	// a phase with an empty playlist has no soundtrack, so the last track is
+	// changed rather than taken away
+	const remove = (i: number) =>
+		videos.length > 1 && onPlaylistChange(videos.filter((_, n) => n !== i))
+
+	const startEdit = (i: number) => {
+		setEditingTrack(i)
+		setTrackDraft(videos[i])
+		setTrackInvalid(false)
+	}
+
+	const saveEdit = (i: number) => {
+		const id = parseVideoId(trackDraft)
+		if (!id) return setTrackInvalid(true)
+		setEditingTrack(null)
+		onPlaylistChange(videos.map((v, n) => (n === i ? id : v)))
+	}
 
 	return (
 		<div
@@ -1003,25 +1022,80 @@ function PhaseVideo({
 								>
 									{i === pos ? '▶' : '▷'}
 								</button>
-								<a
-									href={`https://www.youtube.com/watch?v=${id}`}
-									target="_blank"
-									rel="noreferrer"
-									className="link link-hover flex-1 truncate"
-								>
-									{titleOf(id)}
-								</a>
-								<button
-									type="button"
-									id={`${phase}-playlist-remove-${i}`}
-									data-testid={`${phase}-playlist-remove-${i}`}
-									aria-label={`Remove: ${titleOf(id)}`}
-									title="Remove"
-									onClick={() => remove(i)}
-									className="btn btn-ghost btn-xs"
-								>
-									✕
-								</button>
+								{editingTrack === i ? (
+									<form
+										className="flex flex-1 items-center gap-2"
+										onSubmit={(e) => {
+											e.preventDefault()
+											saveEdit(i)
+										}}
+									>
+										<input
+											id={`${phase}-playlist-edit-input-${i}`}
+											data-testid={`${phase}-playlist-edit-input-${i}`}
+											autoFocus
+											value={trackDraft}
+											aria-label={`Youtube link for track ${i + 1}`}
+											onChange={(e) => {
+												setTrackDraft(e.target.value)
+												setTrackInvalid(false)
+											}}
+											className="input input-xs flex-1"
+										/>
+										<button
+											type="submit"
+											id={`${phase}-playlist-edit-save-${i}`}
+											data-testid={`${phase}-playlist-edit-save-${i}`}
+											className="btn btn-xs"
+										>
+											Save
+										</button>
+										<button
+											type="button"
+											id={`${phase}-playlist-edit-cancel-${i}`}
+											data-testid={`${phase}-playlist-edit-cancel-${i}`}
+											onClick={() => setEditingTrack(null)}
+											className="btn btn-ghost btn-xs"
+										>
+											Cancel
+										</button>
+									</form>
+								) : (
+									<>
+										<a
+											href={`https://www.youtube.com/watch?v=${id}`}
+											target="_blank"
+											rel="noreferrer"
+											className="link link-hover flex-1 truncate"
+										>
+											{titleOf(id)}
+										</a>
+										<button
+											type="button"
+											id={`${phase}-playlist-edit-${i}`}
+											data-testid={`${phase}-playlist-edit-${i}`}
+											aria-label={`Change the link for: ${titleOf(id)}`}
+											title="Change the link"
+											onClick={() => startEdit(i)}
+											className="btn btn-ghost btn-xs"
+										>
+											✎
+										</button>
+										{videos.length > 1 && (
+											<button
+												type="button"
+												id={`${phase}-playlist-remove-${i}`}
+												data-testid={`${phase}-playlist-remove-${i}`}
+												aria-label={`Remove: ${titleOf(id)}`}
+												title="Remove"
+												onClick={() => remove(i)}
+												className="btn btn-ghost btn-xs"
+											>
+												✕
+											</button>
+										)}
+									</>
+								)}
 							</li>
 						))}
 					</ol>
@@ -1052,12 +1126,13 @@ function PhaseVideo({
 							Add
 						</button>
 					</form>
-					{invalid && (
+					{(invalid || trackInvalid) && (
 						<p className="text-error text-xs">That doesn’t look like a youtube link.</p>
 					)}
 					<p className="text-xs opacity-60">
 						Each switch picks up where this playlist left off, then rolls on to the next
 						track.
+						{videos.length === 1 && ' The last track can be changed, but not taken away.'}
 					</p>
 				</div>
 			</details>
