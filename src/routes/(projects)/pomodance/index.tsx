@@ -115,6 +115,20 @@ const minutesBetween = (a: string, b: string) =>
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
 const PROGRESS_SAVE_MS = 5_000
+/** Long enough for a player told to play to have reached playing or buffering. */
+const PLAYBACK_CHECK_MS = 1_500
+
+/** Whether sound is on its way out of this player, rather than waiting on a click. */
+function playbackUnderway(player: YTPlayer) {
+	const YT = window.YT
+	if (!YT) return false
+	try {
+		const state = player.getPlayerState()
+		return state === YT.PlayerState.PLAYING || state === YT.PlayerState.BUFFERING
+	} catch {
+		return true
+	}
+}
 
 function PomodancePage() {
 	const [settings, setSettings] = useState<Settings>(loadSettings)
@@ -147,6 +161,7 @@ function PomodancePage() {
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
 	const played = useRef<Record<Phase, boolean>>({ work: false, break: false })
 	const [playersReady, setPlayersReady] = useState(0)
+	const [musicBlocked, setMusicBlocked] = useState(false)
 
 	const { phase } = timer
 	const running = timer.endsAt !== null
@@ -291,16 +306,36 @@ function PomodancePage() {
 	// pressing play on the other one is a request to switch phases, so it gets
 	// paused again and routed through the confirm dialog.
 	useEffect(() => {
+		let check: ReturnType<typeof setTimeout> | undefined
 		for (const p of PHASES) {
 			const player = players.current[p]
 			if (!player) continue
-			if (p === phase && running) player.playVideo()
-			else {
+			if (p === phase && running) {
+				player.playVideo()
+				// a page that has not been clicked yet is not allowed to start audio,
+				// and the refusal is silent: ask the player afterwards whether it took
+				check = setTimeout(() => setMusicBlocked(!playbackUnderway(player)), PLAYBACK_CHECK_MS)
+			} else {
 				captureRef.current(p)
 				player.pauseVideo()
 			}
 		}
+		if (!running) setMusicBlocked(false)
+		return () => clearTimeout(check)
 	}, [phase, running, playersReady])
+
+	// the click that dismisses the notice is a user gesture wherever it lands, so
+	// any click or key will do
+	useEffect(() => {
+		if (!musicBlocked) return
+		const retry = () => players.current[phase]?.playVideo()
+		window.addEventListener('pointerdown', retry)
+		window.addEventListener('keydown', retry)
+		return () => {
+			window.removeEventListener('pointerdown', retry)
+			window.removeEventListener('keydown', retry)
+		}
+	}, [musicBlocked, phase])
 
 	const setTrack = (p: Phase, index: number) => {
 		seconds.current[p] = 0
@@ -311,7 +346,10 @@ function PomodancePage() {
 
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
-		if (state === YT.PlayerState.PLAYING) played.current[p] = true
+		if (state === YT.PlayerState.PLAYING) {
+			played.current[p] = true
+			if (p === phase) setMusicBlocked(false)
+		}
 		if (state === YT.PlayerState.ENDED) {
 			setTrack(p, trackIndex[p] + 1)
 			return
@@ -454,6 +492,27 @@ function PomodancePage() {
 							placeholder="what are you going to do?"
 						/>
 					</section>
+
+					{musicBlocked && (
+						<div
+							data-testid="music-blocked"
+							className="flex flex-col items-center gap-1 text-center"
+						>
+							<button
+								type="button"
+								data-testid="resume-music"
+								id="resume-music"
+								onClick={() => players.current[phase]?.playVideo()}
+								className="btn btn-outline rounded-full"
+							>
+								▶ Bring the music back
+							</button>
+							<p className="font-ui text-xs opacity-70">
+								Browsers don’t let a page start audio on its own, so the soundtrack needs
+								one click after a reload.
+							</p>
+						</div>
+					)}
 
 					<section className="grid items-start gap-4 md:grid-cols-3">
 						{PHASES.map((p) => (
