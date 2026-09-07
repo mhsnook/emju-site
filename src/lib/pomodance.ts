@@ -1,17 +1,14 @@
 export type Phase = 'work' | 'break'
 
+export type PhaseSettings = { videos: string[]; minutes: number }
+
 export type Settings = {
-	workVideos: string[]
-	breakVideos: string[]
-	workMinutes: number
-	breakMinutes: number
-	ledgerHidden: boolean
+	phases: Record<Phase, PhaseSettings>
+	showLedger: boolean
 	lessMotion: boolean
 }
 
-/** Where a phase's playlist is parked: which track, and how far into it. */
-export type Cursor = { index: number; seconds: number }
-export type Cursors = Record<Phase, Cursor>
+type Cursors = Record<Phase, { index: number; seconds: number }>
 
 export type Pomo = {
 	id: string
@@ -29,24 +26,15 @@ const POMOS_KEY = 'pomodance:pomos'
 const INTENTION_KEY = 'pomodance:intention'
 const DAY_KEY = 'pomodance:day'
 const CURSORS_KEY = 'pomodance:cursors'
-const LEGACY_LEDGER_KEY = 'pomodance:ledger-hidden'
 
 export const DEFAULT_SETTINGS: Settings = {
-	workVideos: ['jfKfPfyJRdk'],
-	breakVideos: ['FGBhQbmPwH8', 'dQw4w9WgXcQ'],
-	workMinutes: 25,
-	breakMinutes: 5,
-	ledgerHidden: false,
+	phases: {
+		work: { videos: ['jfKfPfyJRdk'], minutes: 25 },
+		break: { videos: ['FGBhQbmPwH8', 'dQw4w9WgXcQ'], minutes: 5 },
+	},
+	showLedger: true,
 	lessMotion: false,
 }
-
-export const EMPTY_CURSORS: Cursors = {
-	work: { index: 0, seconds: 0 },
-	break: { index: 0, seconds: 0 },
-}
-
-export const VIDEOS_KEY = { work: 'workVideos', break: 'breakVideos' } as const
-export const MINUTES_KEY = { work: 'workMinutes', break: 'breakMinutes' } as const
 
 /** Pomos shorter than this are discarded rather than filed. */
 export const MIN_POMO_MS = 60_000
@@ -69,36 +57,43 @@ function write(key: string, value: unknown) {
 }
 
 /**
- * Fills in defaults, lifts the single-video settings of older saves into lists,
- * and reduces every entry to a bare video id so list positions and playable
- * tracks are the same thing.
+ * Fills in the defaults for anything a save is missing, and reduces every
+ * playlist entry to a bare video id so a position in the list and a playable
+ * track are the same thing.
  */
 export function normalizeSettings(stored: unknown): Settings {
-	const s = (stored ?? {}) as Partial<Settings> & { workVideo?: unknown; breakVideo?: unknown }
-	const list = (many: unknown, one: unknown, fallback: string[]) => {
-		const raw = Array.isArray(many) ? many : typeof one === 'string' ? [one] : null
-		if (!raw) return fallback
-		return raw
-			.filter((v) => typeof v === 'string')
-			.map(parseVideoId)
-			.filter(Boolean)
+	const s = (stored ?? {}) as Partial<Settings>
+	const phase = (p: Phase): PhaseSettings => {
+		const fallback = DEFAULT_SETTINGS.phases[p]
+		const saved = s.phases?.[p]
+		const minutes = saved?.minutes
+		return {
+			videos: saved?.videos
+				? saved.videos
+						.filter((v) => typeof v === 'string')
+						.map(parseVideoId)
+						.filter(Boolean)
+				: fallback.videos,
+			minutes: typeof minutes === 'number' && minutes > 0 ? minutes : fallback.minutes,
+		}
 	}
 	return {
-		...DEFAULT_SETTINGS,
-		...s,
-		workVideos: list(s.workVideos, s.workVideo, DEFAULT_SETTINGS.workVideos),
-		breakVideos: list(s.breakVideos, s.breakVideo, DEFAULT_SETTINGS.breakVideos),
+		phases: { work: phase('work'), break: phase('break') },
+		showLedger: s.showLedger ?? DEFAULT_SETTINGS.showLedger,
+		lessMotion: s.lessMotion ?? DEFAULT_SETTINGS.lessMotion,
 	}
 }
 
-export function loadSettings(): Settings {
-	const stored = read<Record<string, unknown>>(SETTINGS_KEY, {})
-	if (stored.ledgerHidden === undefined) stored.ledgerHidden = read(LEGACY_LEDGER_KEY, false)
-	return normalizeSettings(stored)
-}
+export const loadSettings = () => normalizeSettings(read(SETTINGS_KEY, {}))
 export const saveSettings = (settings: Settings) => write(SETTINGS_KEY, settings)
 
-export const loadCursors = (): Cursors => ({ ...EMPTY_CURSORS, ...read(CURSORS_KEY, {}) })
+export function loadCursors(): Cursors {
+	const stored = read<Partial<Cursors>>(CURSORS_KEY, {})
+	return {
+		work: stored.work ?? { index: 0, seconds: 0 },
+		break: stored.break ?? { index: 0, seconds: 0 },
+	}
+}
 export const saveCursors = (cursors: Cursors) => write(CURSORS_KEY, cursors)
 
 /** Any pomo left open by a closed tab gets ended at the earlier of now or its full length. */
@@ -177,7 +172,7 @@ export const trackPos = (length: number, index: number) =>
 export const trackAt = (ids: string[], index: number) => ids[trackPos(ids.length, index)] ?? ''
 
 export function msFor(settings: Settings, phase: Phase) {
-	return settings[MINUTES_KEY[phase]] * 60_000
+	return settings.phases[phase].minutes * 60_000
 }
 
 export function formatClock(seconds: number) {
@@ -231,7 +226,7 @@ export const sounds = {
 
 // ---- youtube iframe api ----
 
-export type VideoRequest = { videoId: string; startSeconds?: number }
+type VideoRequest = { videoId: string; startSeconds?: number }
 
 export type YTPlayer = {
 	playVideo(): void
@@ -255,7 +250,7 @@ type YTNamespace = {
 			}
 		}
 	) => YTPlayer
-	PlayerState: { ENDED: number; PLAYING: number; PAUSED: number; BUFFERING: number }
+	PlayerState: { ENDED: number; PLAYING: number; PAUSED: number }
 }
 
 declare global {
@@ -284,11 +279,9 @@ export function loadYouTubeApi(): Promise<YTNamespace> {
 
 // ---- video titles ----
 
-const titles = new Map<string, string>()
+const titles = new Map<string, Promise<string | null>>()
 
-/** Titles come from youtube's oembed endpoint; without one we just show the id. */
-export async function fetchVideoTitle(id: string): Promise<string | null> {
-	if (titles.has(id)) return titles.get(id)!
+async function requestTitle(id: string): Promise<string | null> {
 	try {
 		const res = await fetch(
 			`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(
@@ -297,15 +290,18 @@ export async function fetchVideoTitle(id: string): Promise<string | null> {
 		)
 		if (!res.ok) return null
 		const { title } = (await res.json()) as { title?: string }
-		if (!title) return null
-		titles.set(id, title)
-		return title
+		return title ?? null
 	} catch {
 		return null
 	}
 }
 
-export const cachedVideoTitle = (id: string) => titles.get(id) ?? null
+/** Caches the promise, not the title, so a miss is not retried on every edit. */
+export function fetchVideoTitle(id: string): Promise<string | null> {
+	const pending = titles.get(id) ?? requestTitle(id)
+	titles.set(id, pending)
+	return pending
+}
 
 export function cn(...parts: Array<string | false | null | undefined>) {
 	return parts.filter(Boolean).join(' ')

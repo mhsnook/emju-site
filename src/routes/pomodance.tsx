@@ -5,7 +5,6 @@ import remarkGfm from 'remark-gfm'
 
 import { pomodance as copy } from '#/content/site'
 import {
-	cachedVideoTitle,
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
@@ -18,7 +17,6 @@ import {
 	loadSettings,
 	loadYouTubeApi,
 	MIN_POMO_MS,
-	MINUTES_KEY,
 	msFor,
 	parseVideoId,
 	saveCursors,
@@ -30,10 +28,9 @@ import {
 	straddlesRollover,
 	trackAt,
 	trackPos,
-	VIDEOS_KEY,
 	workDayOf,
-	type Cursors,
 	type Phase,
+	type PhaseSettings,
 	type Pomo,
 	type Settings,
 	type YTPlayer,
@@ -84,15 +81,24 @@ const PROGRESS_SAVE_MS = 5_000
 
 function PomodancePage() {
 	const [settings, setSettings] = useState<Settings>(loadSettings)
-	const [cursors, setCursors] = useState<Cursors>(loadCursors)
+	const [restored] = useState(loadCursors)
+	const [trackIndex, setTrackIndex] = useState<Record<Phase, number>>({
+		work: restored.work.index,
+		break: restored.break.index,
+	})
+	// nothing renders the playback position, so it stays out of state and the
+	// page does not re-render every time it is saved
+	const seconds = useRef<Record<Phase, number>>({
+		work: restored.work.seconds,
+		break: restored.break.seconds,
+	})
 	const [timer, dispatch] = useReducer(timerReducer, {
 		phase: 'work',
 		endsAt: null,
 		remainingMs: msFor(settings, 'work'),
 	} satisfies Timer)
-	const [secondsLeft, setSecondsLeft] = useState(0)
 	const [intention, setIntention] = useState(loadIntention)
-	const [pomos, setPomos] = useState(() => loadPomos(settings.workMinutes))
+	const [pomos, setPomos] = useState(() => loadPomos(settings.phases.work.minutes))
 	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
 
 	const [review, setReview] = useState<Pomo | null>(null)
@@ -111,7 +117,6 @@ function PomodancePage() {
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
-	useEffect(() => saveCursors(cursors), [cursors])
 
 	const patchPomo = (id: string, patch: Partial<Pomo>) =>
 		setPomos((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -167,25 +172,14 @@ function PomodancePage() {
 		sounds.ring()
 		switchTo(phase === 'work' ? 'break' : 'work', true)
 	}
-	const completeRef = useRef(complete)
-	completeRef.current = complete
-
-	// tick from the wall clock so a backgrounded tab still finishes on time
-	useEffect(() => {
-		const endsAt = timer.endsAt
-		if (endsAt === null) return
-		const tick = () => {
-			const left = endsAt - Date.now()
-			if (left > 0) setSecondsLeft(Math.ceil(left / 1000))
-			else completeRef.current()
-		}
-		tick()
-		const id = setInterval(tick, 250)
-		return () => clearInterval(id)
-	}, [timer.endsAt])
+	const persistCursors = (index: Record<Phase, number>) =>
+		saveCursors({
+			work: { index: index.work, seconds: seconds.current.work },
+			break: { index: index.break, seconds: seconds.current.break },
+		})
 
 	// A paused player keeps its own position, so resuming a phase needs no help.
-	// The stored seconds are for the next page load.
+	// The saved seconds are for the next page load.
 	const captureProgress = (p: Phase) => {
 		const player = players.current[p]
 		const YT = window.YT
@@ -193,8 +187,8 @@ function PomodancePage() {
 		try {
 			const state = player.getPlayerState()
 			if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.PAUSED) return
-			const seconds = Math.max(0, Math.floor(player.getCurrentTime()))
-			setCursors((c) => (c[p].seconds === seconds ? c : { ...c, [p]: { ...c[p], seconds } }))
+			seconds.current[p] = Math.max(0, Math.floor(player.getCurrentTime()))
+			persistCursors(trackIndex)
 		} catch {
 			/* player went away mid-read */
 		}
@@ -223,16 +217,17 @@ function PomodancePage() {
 		}
 	}, [phase, running, playersReady])
 
-	const advanceTrack = (p: Phase) =>
-		setCursors((c) => ({ ...c, [p]: { index: c[p].index + 1, seconds: 0 } }))
-
-	const selectTrack = (p: Phase, index: number) =>
-		setCursors((c) => ({ ...c, [p]: { index, seconds: 0 } }))
+	const setTrack = (p: Phase, index: number) => {
+		seconds.current[p] = 0
+		const next = { ...trackIndex, [p]: index }
+		setTrackIndex(next)
+		persistCursors(next)
+	}
 
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
 		if (state === YT.PlayerState.ENDED) {
-			advanceTrack(p)
+			setTrack(p, trackIndex[p] + 1)
 			return
 		}
 		if (p !== phase) {
@@ -263,8 +258,10 @@ function PomodancePage() {
 		if (idle) switchTo(phase, false, next)
 	}
 
-	const updatePlaylist = (p: Phase, videos: string[]) =>
-		updateSettings({ [VIDEOS_KEY[p]]: videos })
+	const updatePhase = (p: Phase, patch: Partial<PhaseSettings>) =>
+		updateSettings({
+			phases: { ...settings.phases, [p]: { ...settings.phases[p], ...patch } },
+		})
 
 	const updateIntention = (value: string) => {
 		setIntention(value)
@@ -278,14 +275,7 @@ function PomodancePage() {
 		setReview(null)
 	}
 
-	const clock = formatClock(running ? secondsLeft : Math.ceil(timer.remainingMs / 1000))
-
-	useEffect(() => {
-		document.title = `${clock} ${isBreak ? '💃' : '🍅'} ${copy.title}`
-	}, [clock, isBreak])
-
 	const today = workDayOf(new Date())
-	const showLedger = !settings.ledgerHidden
 
 	return (
 		<div
@@ -293,7 +283,7 @@ function PomodancePage() {
 			data-theme="emju-dark"
 			className={cn('pomo', isBreak && 'is-break', settings.lessMotion && 'is-calm')}
 		>
-			<div className={cn('grid gap-6 p-6', showLedger && 'lg:grid-cols-[1fr_20rem]')}>
+			<div className={cn('grid gap-6 p-6', settings.showLedger && 'lg:grid-cols-[1fr_20rem]')}>
 				<div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
 					<header className="flex items-start justify-between gap-4">
 						<div className="flex flex-col gap-1">
@@ -323,13 +313,12 @@ function PomodancePage() {
 					)}
 
 					<section className="flex flex-col items-center gap-4">
-						<div
-							data-testid="clock"
-							className="pomo-clock font-display text-[clamp(4rem,20vw,11rem)] leading-none font-bold tabular-nums"
-							aria-live="polite"
-						>
-							{clock}
-						</div>
+						<Clock
+							endsAt={timer.endsAt}
+							remainingMs={timer.remainingMs}
+							isBreak={isBreak}
+							onComplete={complete}
+						/>
 						<div className="flex flex-wrap justify-center gap-3">
 							<button
 								data-testid="start-button"
@@ -370,10 +359,11 @@ function PomodancePage() {
 								phase={p}
 								active={phase === p}
 								playing={phase === p && running}
-								videos={settings[VIDEOS_KEY[p]]}
-								cursor={cursors[p]}
-								onPlaylistChange={(videos) => updatePlaylist(p, videos)}
-								onSelectTrack={(i) => selectTrack(p, i)}
+								videos={settings.phases[p].videos}
+								index={trackIndex[p]}
+								startSeconds={seconds.current[p]}
+								onPlaylistChange={(videos) => updatePhase(p, { videos })}
+								onSelectTrack={(i) => setTrack(p, i)}
 								onReady={(player) => registerPlayer(p, player)}
 								onState={(s) => onPlayerStateRef.current(p, s)}
 							/>
@@ -381,7 +371,7 @@ function PomodancePage() {
 					</section>
 				</div>
 
-				{showLedger && <Ledger pomos={pomos} day={day} />}
+				{settings.showLedger && <Ledger pomos={pomos} day={day} />}
 			</div>
 
 			{showSettings && (
@@ -392,14 +382,12 @@ function PomodancePage() {
 							<SettingInput
 								key={p}
 								testId={`${p}-minutes-input`}
-								label={
-									p === 'work' ? copy.settings.workMinutes : copy.settings.breakMinutes
-								}
+								label={copy.settings.minutes[p]}
 								type="number"
-								value={String(settings[MINUTES_KEY[p]])}
+								value={String(settings.phases[p].minutes)}
 								onChange={(v) =>
-									updateSettings({
-										[MINUTES_KEY[p]]: clampMinutes(v, DEFAULT_SETTINGS[MINUTES_KEY[p]]),
+									updatePhase(p, {
+										minutes: clampMinutes(v, DEFAULT_SETTINGS.phases[p].minutes),
 									})
 								}
 							/>
@@ -408,8 +396,8 @@ function PomodancePage() {
 					<Toggle
 						testId="ledger-toggle"
 						label={copy.settings.showLedger}
-						checked={showLedger}
-						onChange={(v) => updateSettings({ ledgerHidden: !v })}
+						checked={settings.showLedger}
+						onChange={(v) => updateSettings({ showLedger: v })}
 					/>
 					<Toggle
 						testId="less-motion-toggle"
@@ -500,6 +488,50 @@ function PomodancePage() {
 	)
 }
 
+function Clock({
+	endsAt,
+	remainingMs,
+	isBreak,
+	onComplete,
+}: {
+	endsAt: number | null
+	remainingMs: number
+	isBreak: boolean
+	onComplete: () => void
+}) {
+	const [secondsLeft, setSecondsLeft] = useState(() => Math.ceil(remainingMs / 1000))
+	const complete = useRef(onComplete)
+	complete.current = onComplete
+
+	// tick from the wall clock so a backgrounded tab still finishes on time
+	useEffect(() => {
+		if (endsAt === null) return setSecondsLeft(Math.ceil(remainingMs / 1000))
+		const tick = () => {
+			const left = endsAt - Date.now()
+			if (left > 0) setSecondsLeft(Math.ceil(left / 1000))
+			else complete.current()
+		}
+		tick()
+		const id = setInterval(tick, 250)
+		return () => clearInterval(id)
+	}, [endsAt, remainingMs])
+
+	const text = formatClock(secondsLeft)
+	useEffect(() => {
+		document.title = `${text} ${isBreak ? '💃' : '🍅'} ${copy.title}`
+	}, [text, isBreak])
+
+	return (
+		<div
+			data-testid="clock"
+			className="pomo-clock font-display text-[clamp(4rem,20vw,11rem)] leading-none font-bold tabular-nums"
+			aria-live="polite"
+		>
+			{text}
+		</div>
+	)
+}
+
 function clampMinutes(v: string, fallback: number) {
 	const n = Number.parseInt(v, 10)
 	return Number.isFinite(n) && n > 0 ? Math.min(n, 180) : fallback
@@ -568,20 +600,23 @@ function Toggle({
 	)
 }
 
-/** Titles are a nicety: until (or unless) one arrives, the id stands in for it. */
 function useVideoTitles(ids: string[]) {
-	const [, bump] = useReducer((n: number) => n + 1, 0)
+	const [titles, setTitles] = useState<Record<string, string>>({})
 	const key = ids.join(',')
+
 	useEffect(() => {
 		let cancelled = false
-		void Promise.all(key ? key.split(',').map(fetchVideoTitle) : []).then(
-			() => !cancelled && bump()
-		)
+		for (const id of key ? key.split(',') : []) {
+			void fetchVideoTitle(id).then((title) => {
+				if (title && !cancelled) setTitles((t) => (t[id] ? t : { ...t, [id]: title }))
+			})
+		}
 		return () => {
 			cancelled = true
 		}
 	}, [key])
-	return (id: string) => cachedVideoTitle(id) ?? id
+
+	return (id: string) => titles[id] ?? id
 }
 
 function PhaseVideo({
@@ -589,7 +624,8 @@ function PhaseVideo({
 	active,
 	playing,
 	videos,
-	cursor,
+	index,
+	startSeconds,
 	onPlaylistChange,
 	onSelectTrack,
 	onReady,
@@ -599,7 +635,8 @@ function PhaseVideo({
 	active: boolean
 	playing: boolean
 	videos: string[]
-	cursor: { index: number; seconds: number }
+	index: number
+	startSeconds: number
 	onPlaylistChange: (videos: string[]) => void
 	onSelectTrack: (index: number) => void
 	onReady: (p: YTPlayer | null) => void
@@ -609,9 +646,8 @@ function PhaseVideo({
 	const [invalid, setInvalid] = useState(false)
 	const titleOf = useVideoTitles(videos)
 
-	const pos = trackPos(videos.length, cursor.index)
-	const videoId = trackAt(videos, cursor.index)
-	const heading = phase === 'work' ? copy.playlist.work : copy.playlist.break
+	const pos = trackPos(videos.length, index)
+	const videoId = trackAt(videos, index)
 
 	const add = () => {
 		const id = parseVideoId(draft)
@@ -632,15 +668,16 @@ function PhaseVideo({
 			)}
 		>
 			<span className="font-ui text-xs tracking-wide uppercase opacity-70">
-				{heading} {videos.length > 1 && `· ${pos + 1}/${videos.length}`}
-				{active && ' · now playing'}
+				{copy.playlist.heading[phase]}
+				{videos.length > 1 && ` · ${pos + 1}/${videos.length}`}
+				{active && ` · ${copy.playlist.nowPlaying}`}
 			</span>
 			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
 				{videoId ? (
 					<VideoFrame
 						videoId={videoId}
-						trackKey={`${cursor.index}:${videoId}`}
-						startSeconds={cursor.seconds}
+						index={index}
+						startSeconds={startSeconds}
 						autoplay={playing}
 						onReady={onReady}
 						onState={onState}
@@ -730,23 +767,23 @@ function PhaseVideo({
 
 function VideoFrame({
 	videoId,
-	trackKey,
+	index,
 	startSeconds,
 	autoplay,
 	onReady,
 	onState,
 }: {
 	videoId: string
-	trackKey: string
+	index: number
 	startSeconds: number
 	autoplay: boolean
 	onReady: (p: YTPlayer | null) => void
 	onState: (state: number) => void
 }) {
 	const mount = useRef<HTMLDivElement>(null)
-	const player = useRef<YTPlayer | null>(null)
+	const [player, setPlayer] = useState<YTPlayer | null>(null)
+	const trackKey = `${index}:${videoId}`
 	const loaded = useRef<string | null>(null)
-	const [ready, setReady] = useState(false)
 
 	const latest = useRef({ videoId, trackKey, startSeconds, autoplay, onReady, onState })
 	latest.current = { videoId, trackKey, startSeconds, autoplay, onReady, onState }
@@ -755,25 +792,20 @@ function VideoFrame({
 	// below, because tearing the iframe down between songs loses the API handle.
 	useEffect(() => {
 		if (!mount.current) return
+		const { videoId: id, startSeconds: at, trackKey: key } = latest.current
 		let created: YTPlayer | null = null
 		let cancelled = false
 		const host = document.createElement('div')
 		mount.current.replaceChildren(host)
-		const initial = latest.current
-		loaded.current = initial.trackKey
+		loaded.current = key
 		void loadYouTubeApi().then((YT) => {
 			if (cancelled) return
 			created = new YT.Player(host, {
-				videoId: initial.videoId,
-				playerVars: {
-					rel: 0,
-					playsinline: 1,
-					start: Math.floor(initial.startSeconds),
-				},
+				videoId: id,
+				playerVars: { rel: 0, playsinline: 1, start: Math.floor(at) },
 				events: {
 					onReady: () => {
-						player.current = created
-						setReady(true)
+						setPlayer(created)
 						latest.current.onReady(created)
 					},
 					onStateChange: (e) => latest.current.onState(e.data),
@@ -782,23 +814,22 @@ function VideoFrame({
 		})
 		return () => {
 			cancelled = true
-			player.current = null
 			loaded.current = null
-			setReady(false)
+			setPlayer(null)
 			latest.current.onReady(null)
 			created?.destroy()
 		}
 	}, [])
 
 	useEffect(() => {
-		if (!ready || loaded.current === trackKey) return
+		if (!player || loaded.current === trackKey) return
 		loaded.current = trackKey
 		const { videoId: id, startSeconds: at, autoplay: play } = latest.current
 		if (!id) return
 		const request = { videoId: id, startSeconds: Math.floor(at) }
-		if (play) player.current?.loadVideoById(request)
-		else player.current?.cueVideoById(request)
-	}, [trackKey, ready])
+		if (play) player.loadVideoById(request)
+		else player.cueVideoById(request)
+	}, [trackKey, player])
 
 	return <div ref={mount} className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
 }

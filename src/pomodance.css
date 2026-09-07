@@ -112,18 +112,24 @@
 	}
 }
 
-/* less motion: hold the party still and drop it to one calm colour */
 .pomo.is-break.is-calm {
 	--pomo-accent: #ffd166;
 	background: #3b2a52;
 }
 
+/* content:none removes the gradient layer outright, so it needs no animation reset */
 .pomo.is-break.is-calm::before {
 	content: none;
 }
 
 .pomo.is-break.is-calm .pomo-clock {
+	animation: none;
 	text-shadow: none;
+}
+
+.pomo.is-break.is-calm .pomo-video-main,
+.pomo.is-calm .pomo-dancers span {
+	animation: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -133,11 +139,4 @@
 	.pomo-dancers span {
 		animation: none;
 	}
-}
-
-.pomo.is-calm.is-break::before,
-.pomo.is-calm.is-break .pomo-clock,
-.pomo.is-calm.is-break .pomo-video-main,
-.pomo.is-calm .pomo-dancers span {
-	animation: none;
 }

@@ -186,8 +186,8 @@ export const pomodance = {
 		title: "It's past 4am",
 	},
 	playlist: {
-		work: 'Work playlist',
-		break: 'Dance playlist',
+		heading: { work: 'Work playlist', break: 'Dance playlist' },
+		nowPlaying: 'now playing',
 		summary: 'Playlist',
 		add: 'Paste a youtube link or id',
 		addAction: 'Add',
@@ -200,8 +200,7 @@ export const pomodance = {
 	settings: {
 		open: 'Settings',
 		title: 'Settings',
-		workMinutes: 'Work minutes',
-		breakMinutes: 'Break minutes',
+		minutes: { work: 'Work minutes', break: 'Break minutes' },
 		showLedger: 'Show the ledger',
 		lessMotion: 'Less motion',
 		lessMotionHint: 'Calmer colours and no wobbling while the dance music plays.',

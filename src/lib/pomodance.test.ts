@@ -79,24 +79,26 @@ describe('trackPos', () => {
 })
 
 describe('normalizeSettings', () => {
-	it('falls back to the defaults for anything missing', () => {
+	it('falls back to the defaults for anything a save is missing', () => {
 		expect(normalizeSettings(null)).toEqual(DEFAULT_SETTINGS)
-		expect(normalizeSettings({ workMinutes: 50 }).workMinutes).toBe(50)
-	})
-	it('lifts the single-video settings of older saves into playlists', () => {
-		const s = normalizeSettings({
-			workVideo: 'https://youtu.be/jfKfPfyJRdk',
-			breakVideo: 'FGBhQbmPwH8',
+		expect(normalizeSettings({ phases: { work: { minutes: 50 } } }).phases.work).toEqual({
+			videos: DEFAULT_SETTINGS.phases.work.videos,
+			minutes: 50,
 		})
-		expect(s.workVideos).toEqual(['jfKfPfyJRdk'])
-		expect(s.breakVideos).toEqual(['FGBhQbmPwH8'])
 	})
 	it('reduces playlist entries to ids and drops the unplayable ones', () => {
 		const s = normalizeSettings({
-			workVideos: ['https://www.youtube.com/watch?v=jfKfPfyJRdk', 'nope', 42],
-			breakVideos: [],
+			phases: {
+				work: { videos: ['https://www.youtube.com/watch?v=jfKfPfyJRdk', 'nope', 42] },
+				break: { videos: [] },
+			},
 		})
-		expect(s.workVideos).toEqual(['jfKfPfyJRdk'])
-		expect(s.breakVideos).toEqual([])
+		expect(s.phases.work.videos).toEqual(['jfKfPfyJRdk'])
+		expect(s.phases.break.videos).toEqual([])
+	})
+	it('keeps an emptied playlist empty rather than restoring the defaults', () => {
+		expect(normalizeSettings({ phases: { break: { videos: [] } } }).phases.break.videos).toEqual(
+			[]
+		)
 	})
 })
