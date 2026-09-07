@@ -11,21 +11,30 @@ import {
 	dayLabel,
 	fetchVideoTitle,
 	formatClock,
+	isFresh,
+	keepIfSame,
 	loadCursors,
 	loadDay,
 	loadIntention,
 	loadPomos,
 	loadSettings,
+	loadTimer,
 	loadYouTubeApi,
 	MIN_POMO_MS,
 	msFor,
 	parseVideoId,
+	readPomos,
+	readTimer,
+	remainingOf,
+	resumablePomo,
 	saveCursors,
 	saveDay,
 	saveIntention,
 	savePomos,
 	saveSettings,
+	saveTimer,
 	sounds,
+	STORAGE_PREFIX,
 	straddlesRollover,
 	trackAt,
 	trackPos,
@@ -34,6 +43,7 @@ import {
 	type PhaseSettings,
 	type Pomo,
 	type Settings,
+	type Timer,
 	type YTPlayer,
 } from './-lib'
 
@@ -70,12 +80,11 @@ const MINUTES_LABEL: Record<Phase, string> = {
 	break: 'Break minutes',
 }
 
-// endsAt set means running; remainingMs is only meaningful while endsAt is null.
-type Timer = { phase: Phase; endsAt: number | null; remainingMs: number }
 type TimerAction =
 	| { type: 'start'; now: number }
 	| { type: 'pause'; now: number }
 	| { type: 'switch'; phase: Phase; durationMs: number; running: boolean; now: number }
+	| { type: 'restore'; timer: Timer }
 
 function timerReducer(t: Timer, a: TimerAction): Timer {
 	switch (a.type) {
@@ -89,6 +98,8 @@ function timerReducer(t: Timer, a: TimerAction): Timer {
 				remainingMs: a.durationMs,
 				endsAt: a.running ? a.now + a.durationMs : null,
 			}
+		case 'restore':
+			return keepIfSame(t, a.timer)
 	}
 }
 
@@ -113,31 +124,56 @@ function PomodancePage() {
 		work: restored.work.seconds,
 		break: restored.break.seconds,
 	})
-	const [timer, dispatch] = useReducer(timerReducer, {
-		phase: 'work',
-		endsAt: null,
-		remainingMs: msFor(settings, 'work'),
-	} satisfies Timer)
+	const [timer, dispatch] = useReducer(timerReducer, settings, loadTimer)
 	const [intention, setIntention] = useState(loadIntention)
-	const [pomos, setPomos] = useState(() => loadPomos(settings.phases.work.minutes))
+	// a restored work timer is a pomo still in progress, so it keeps its ledger entry open
+	const [pomos, setPomos] = useState(() =>
+		loadPomos(settings.phases.work.minutes, timer.phase === 'work' && !isFresh(timer, settings))
+	)
 	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
 
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
+	const [askResume, setAskResume] = useState<Pomo | null>(null)
 	const [askRollover, setAskRollover] = useState(false)
 	const [showSettings, setShowSettings] = useState(false)
 
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
+	const played = useRef<Record<Phase, boolean>>({ work: false, break: false })
 	const [playersReady, setPlayersReady] = useState(0)
 
 	const { phase } = timer
 	const running = timer.endsAt !== null
 	const isBreak = phase === 'break'
-	const idle = !running && timer.remainingMs === msFor(settings, phase)
+	const idle = isFresh(timer, settings)
 	const current = pomos.find((p) => p.end === null) ?? null
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
+	useEffect(() => saveTimer(timer), [timer])
+
+	// This tab is not the only writer: another tab, or a hand edit in devtools,
+	// can move the same keys underneath it.
+	useEffect(() => {
+		const sync = () => {
+			const stored = loadSettings()
+			setSettings((prev) => keepIfSame(prev, stored))
+			setPomos((prev) => keepIfSame(prev, readPomos()))
+			setIntention(loadIntention())
+			setDay(loadDay() ?? workDayOf(new Date()))
+			const t = readTimer()
+			if (t) dispatch({ type: 'restore', timer: t })
+		}
+		const onStorage = (e: StorageEvent) => {
+			if (e.key === null || e.key.startsWith(STORAGE_PREFIX)) sync()
+		}
+		window.addEventListener('storage', onStorage)
+		window.addEventListener('focus', sync)
+		return () => {
+			window.removeEventListener('storage', onStorage)
+			window.removeEventListener('focus', sync)
+		}
+	}, [])
 
 	const patchPomo = (id: string, patch: Partial<Pomo>) =>
 		setPomos((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -170,12 +206,36 @@ function PomodancePage() {
 		setReview(closed)
 	}
 
-	const start = () => {
-		if (running) return
-		const now = Date.now()
+	const startTimer = (now: number) => {
 		sounds.beep()
 		dispatch({ type: 'start', now })
 		if (phase === 'work') openPomo(now)
+	}
+
+	const start = () => {
+		if (running) return
+		const now = Date.now()
+		const interrupted =
+			phase === 'work' && !current
+				? resumablePomo(pomos, day, msFor(settings, 'work'), now)
+				: null
+		if (interrupted) setAskResume(interrupted)
+		else startTimer(now)
+	}
+
+	const resumePomo = (pomo: Pomo) => {
+		const now = Date.now()
+		sounds.beep()
+		patchPomo(pomo.id, { end: null })
+		if (pomo.intention && !intention) updateIntention(pomo.intention)
+		dispatch({
+			type: 'switch',
+			phase: 'work',
+			durationMs: remainingOf(pomo, msFor(settings, 'work')),
+			running: true,
+			now,
+		})
+		setAskResume(null)
 	}
 	const pause = () => {
 		if (!running) return
@@ -247,6 +307,7 @@ function PomodancePage() {
 
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
+		if (state === YT.PlayerState.PLAYING) played.current[p] = true
 		if (state === YT.PlayerState.ENDED) {
 			setTrack(p, trackIndex[p] + 1)
 			return
@@ -262,7 +323,9 @@ function PomodancePage() {
 			return
 		}
 		if (state === YT.PlayerState.PLAYING) start()
-		else if (state === YT.PlayerState.PAUSED) pause()
+		// a browser that blocked the autoplay of a restored pomo reports the player
+		// as paused; only a player that did get going may stop the clock
+		else if (state === YT.PlayerState.PAUSED && played.current[p]) pause()
 	}
 	const onPlayerStateRef = useRef(onPlayerState)
 	onPlayerStateRef.current = onPlayerState
@@ -352,7 +415,7 @@ function PomodancePage() {
 						<div className="flex flex-wrap justify-center gap-3">
 							<button
 								data-testid="start-button"
-								onClick={running ? pause : start}
+								onClick={() => (running ? pause() : start())}
 								className="btn btn-lg rounded-full border-0 bg-[var(--pomo-accent)] font-bold text-black hover:scale-105 hover:bg-[var(--pomo-accent)]"
 							>
 								{running ? 'Pause' : idle ? 'Start' : 'Resume'}
@@ -456,6 +519,46 @@ function PomodancePage() {
 					onDismiss={() => finishReview(review.intention, false, false)}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
 				/>
+			)}
+
+			{askResume && (
+				<Modal testId="resume-dialog" onDismiss={() => setAskResume(null)}>
+					<h2 className="font-display text-2xl">Pick your last pomo back up?</h2>
+					<p>
+						You started it at {fmtTime(askResume.start)} and it stopped{' '}
+						{minutesBetween(askResume.start, askResume.end!)}m later, with{' '}
+						{Math.ceil(remainingOf(askResume, msFor(settings, 'work')) / 60_000)}m still on
+						the clock.
+					</p>
+					{askResume.intention && (
+						<div className="prose prose-sm prose-invert max-w-none opacity-75">
+							<ReactMarkdown remarkPlugins={[remarkGfm]}>
+								{askResume.intention}
+							</ReactMarkdown>
+						</div>
+					)}
+					<div className="modal-action">
+						<button
+							type="button"
+							data-testid="resume-fresh"
+							className="btn btn-outline"
+							onClick={() => {
+								setAskResume(null)
+								startTimer(Date.now())
+							}}
+						>
+							No, start a new one
+						</button>
+						<button
+							type="button"
+							data-testid="resume-yes"
+							className="btn btn-primary"
+							onClick={() => resumePomo(askResume)}
+						>
+							Yes, carry on
+						</button>
+					</div>
+				</Modal>
 			)}
 
 			{confirmSwitch && (

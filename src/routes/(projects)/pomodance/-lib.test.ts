@@ -1,15 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+	closeAbandoned,
 	DEFAULT_SETTINGS,
 	formatClock,
+	isFresh,
+	msFor,
 	normalizeSettings,
 	parseVideoId,
+	remainingOf,
+	restoreTimer,
+	resumablePomo,
 	straddlesRollover,
 	trackAt,
 	trackPos,
 	workDayOf,
 	type Pomo,
+	type Timer,
 } from './-lib'
 
 describe('parseVideoId', () => {
@@ -100,5 +107,131 @@ describe('normalizeSettings', () => {
 		expect(normalizeSettings({ phases: { break: { videos: [] } } }).phases.break.videos).toEqual(
 			[]
 		)
+	})
+})
+
+const WORK_MS = msFor(DEFAULT_SETTINGS, 'work')
+
+const pomoAt = (start: number, lengthMs: number | null, extra: Partial<Pomo> = {}): Pomo => ({
+	id: String(start),
+	day: workDayOf(new Date(start)),
+	start: new Date(start).toISOString(),
+	end: lengthMs === null ? null : new Date(start + lengthMs).toISOString(),
+	intention: 'ship the thing',
+	note: '',
+	confirmed: false,
+	...extra,
+})
+
+describe('restoreTimer', () => {
+	const now = Date.now()
+	const idle: Timer = { phase: 'work', endsAt: null, remainingMs: WORK_MS }
+
+	it('picks a running countdown back up from the wall clock', () => {
+		const endsAt = now + 8 * 60_000
+		expect(
+			restoreTimer(
+				{ phase: 'work', endsAt, remainingMs: WORK_MS, savedAt: now - 60_000 },
+				DEFAULT_SETTINGS,
+				now
+			)
+		).toEqual({ phase: 'work', endsAt, remainingMs: 8 * 60_000 })
+	})
+	it('picks a paused timer back up where it stopped, in its own phase', () => {
+		expect(
+			restoreTimer(
+				{ phase: 'break', endsAt: null, remainingMs: 90_000, savedAt: now - 60_000 },
+				DEFAULT_SETTINGS,
+				now
+			)
+		).toEqual({ phase: 'break', endsAt: null, remainingMs: 90_000 })
+	})
+	it('starts fresh when the countdown ran out or the pause went cold', () => {
+		expect(
+			restoreTimer(
+				{ phase: 'work', endsAt: now - 1, remainingMs: 0, savedAt: now - 1 },
+				DEFAULT_SETTINGS,
+				now
+			)
+		).toEqual(idle)
+		expect(
+			restoreTimer(
+				{ phase: 'break', endsAt: null, remainingMs: 90_000, savedAt: now - 40 * 60_000 },
+				DEFAULT_SETTINGS,
+				now
+			)
+		).toEqual(idle)
+	})
+	it('starts fresh on nothing saved or junk', () => {
+		expect(restoreTimer(null, DEFAULT_SETTINGS, now)).toEqual(idle)
+		expect(restoreTimer({ phase: 'nap', remainingMs: 5 }, DEFAULT_SETTINGS, now)).toEqual(idle)
+		expect(restoreTimer({ phase: 'work' }, DEFAULT_SETTINGS, now)).toEqual(idle)
+	})
+	it('knows a restored timer from an untouched one', () => {
+		expect(isFresh(idle, DEFAULT_SETTINGS)).toBe(true)
+		expect(isFresh({ phase: 'work', endsAt: null, remainingMs: 60_000 }, DEFAULT_SETTINGS)).toBe(
+			false
+		)
+		expect(isFresh({ phase: 'work', endsAt: now, remainingMs: WORK_MS }, DEFAULT_SETTINGS)).toBe(
+			false
+		)
+	})
+})
+
+describe('closeAbandoned', () => {
+	const now = Date.now()
+
+	it('ends an open pomo at the earlier of now and its full length', () => {
+		const [short, long] = closeAbandoned(
+			[pomoAt(now - 5 * 60_000, null), pomoAt(now - 90 * 60_000, null)],
+			25,
+			false,
+			now
+		)
+		expect(short.end).toBe(new Date(now).toISOString())
+		expect(long.end).toBe(new Date(now - 90 * 60_000 + 25 * 60_000).toISOString())
+	})
+	it('leaves the last open pomo running when the timer survived the reload', () => {
+		const pomos = closeAbandoned(
+			[pomoAt(now - 3 * 3_600_000, null), pomoAt(now - 5 * 60_000, null)],
+			25,
+			true,
+			now
+		)
+		expect(pomos[0].end).not.toBe(null)
+		expect(pomos[1].end).toBe(null)
+	})
+})
+
+describe('resumablePomo', () => {
+	const now = Date.now()
+	const today = workDayOf(new Date(now))
+
+	it('offers the last pomo when it stopped short, recently, unreviewed', () => {
+		const pomo = pomoAt(now - 20 * 60_000, 10 * 60_000)
+		expect(resumablePomo([pomo], today, WORK_MS, now)).toBe(pomo)
+		expect(remainingOf(pomo, WORK_MS)).toBe(15 * 60_000)
+	})
+	it('leaves alone a pomo that ran its length, went cold, or was reviewed', () => {
+		expect(resumablePomo([pomoAt(now - 30 * 60_000, WORK_MS)], today, WORK_MS, now)).toBe(null)
+		expect(resumablePomo([pomoAt(now - 3 * 3_600_000, 10 * 60_000)], today, WORK_MS, now)).toBe(
+			null
+		)
+		expect(
+			resumablePomo(
+				[pomoAt(now - 20 * 60_000, 10 * 60_000, { confirmed: true })],
+				today,
+				WORK_MS,
+				now
+			)
+		).toBe(null)
+		expect(
+			resumablePomo([pomoAt(now - 20 * 60_000, 10 * 60_000)], 'not-today', WORK_MS, now)
+		).toBe(null)
+		expect(resumablePomo([pomoAt(now - 20 * 60_000, null)], today, WORK_MS, now)).toBe(null)
+		expect(resumablePomo([], today, WORK_MS, now)).toBe(null)
+	})
+	it('always leaves enough on the clock to file a pomo', () => {
+		expect(remainingOf(pomoAt(now - 60 * 60_000, 60 * 60_000), WORK_MS)).toBe(60_000)
 	})
 })

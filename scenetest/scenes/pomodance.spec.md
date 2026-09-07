@@ -30,3 +30,22 @@ visitor:
 - see ledger
 - click break-playlist-toggle
 - see break-playlist-input
+
+# a running pomo survives a reload
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'keep the pomo going'
+- click start-button
+- seeText Pause
+- see ledger-entry #1
+- wait 1000
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText Pause
+- see ledger-entry #1
+- seeText keep the pomo going
