@@ -286,6 +286,38 @@ export const trackPos = (length: number, index: number) =>
 
 export const trackAt = (ids: string[], index: number) => ids[trackPos(ids.length, index)] ?? ''
 
+/**
+ * Where the cursor lands when a playlist is edited. Because the index counts
+ * tracks played, any change to the list's length lands it on a different song;
+ * this puts it back on the one that was playing, or on whichever took its place
+ * when that song is what went away. `restart` is whether the song changed, and
+ * so whether the player has to load a new one from the top.
+ */
+export function nextCursor(
+	before: string[],
+	after: string[],
+	index: number
+): { index: number; restart: boolean } {
+	if (after.length === 0) return { index, restart: false }
+	const pos = trackPos(before.length, index)
+	if (pos < 0) return { index: 0, restart: true }
+
+	const surviving = after.indexOf(before[pos])
+	const laps = Math.floor(index / after.length)
+	if (surviving >= 0) return { index: laps * after.length + surviving, restart: false }
+
+	// a list of the same length lost nothing, so the song at the cursor was
+	// edited rather than removed: play what replaced it, in its place
+	if (after.length === before.length) return { index: laps * after.length + pos, restart: true }
+
+	// the song is gone: take the next one along that is still in the list
+	for (let step = 1; step <= before.length; step++) {
+		const next = after.indexOf(before[(pos + step) % before.length])
+		if (next >= 0) return { index: laps * after.length + next, restart: true }
+	}
+	return { index: laps * after.length, restart: true }
+}
+
 export function msFor(settings: Settings, phase: Phase) {
 	return settings.phases[phase].minutes * 60_000
 }

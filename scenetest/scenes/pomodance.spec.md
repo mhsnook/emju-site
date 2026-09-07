@@ -108,3 +108,23 @@ visitor:
 - notSee review-dialog
 - see ledger-entry #1
 - seeText already written up
+
+# the last track in a playlist can be changed but not taken away
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- click break-playlist-toggle
+- see break-playlist-remove-1
+- click break-playlist-remove-1
+- notSee break-playlist-remove-0
+- see break-playlist-edit-0
+- click break-playlist-edit-0
+- see break-playlist-edit-input-0
+- typeInto break-playlist-edit-input-0 'https://youtu.be/5qap5aO4i9A'
+- click break-playlist-edit-save-0
+- notSee break-playlist-edit-input-0
+- notSee break-playlist-remove-0
+- see break-playlist-edit-0

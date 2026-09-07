@@ -10,6 +10,7 @@ import {
 	formatClock,
 	isFresh,
 	msFor,
+	nextCursor,
 	normalizeSettings,
 	parseVideoId,
 	pomoFromDraft,
@@ -321,5 +322,58 @@ describe('isThrowaway', () => {
 	})
 	it('keeps one that has been reviewed, however short it ran', () => {
 		expect(isThrowaway(pomoAt(now - 20_000, null, { confirmed: true }), now)).toBe(false)
+	})
+})
+
+describe('nextCursor', () => {
+	const playing = (list: string[], index: number) => trackAt(list, index)
+
+	it('leaves the playing song alone when some other one is removed', () => {
+		const before = ['a', 'b', 'c']
+		const after = ['b', 'c']
+		const { index, restart } = nextCursor(before, after, 1)
+		expect(playing(after, index)).toBe('b')
+		expect(restart).toBe(false)
+	})
+	it('moves on to the next song when the playing one is removed', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['a', 'c'], 1)
+		expect(playing(['a', 'c'], index)).toBe('c')
+		expect(restart).toBe(true)
+	})
+	it('wraps to the top when the last song is the one removed', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['a', 'b'], 2)
+		expect(playing(['a', 'b'], index)).toBe('a')
+		expect(restart).toBe(true)
+	})
+	it('holds its place when a song is added, however many laps in', () => {
+		const { index, restart } = nextCursor(['a'], ['a', 'b'], 3)
+		expect(playing(['a', 'b'], index)).toBe('a')
+		expect(restart).toBe(false)
+	})
+	it('plays what replaced the playing song, in its place', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['a', 'z', 'c'], 1)
+		expect(playing(['a', 'z', 'c'], index)).toBe('z')
+		expect(restart).toBe(true)
+	})
+	it('carries on when some other song in the list is the one edited', () => {
+		const { index, restart } = nextCursor(['a', 'b', 'c'], ['z', 'b', 'c'], 1)
+		expect(playing(['z', 'b', 'c'], index)).toBe('b')
+		expect(restart).toBe(false)
+	})
+	it('holds its place when the whole list is swapped for one the same length', () => {
+		const { index, restart } = nextCursor(['a', 'b'], ['x', 'y'], 1)
+		expect(playing(['x', 'y'], index)).toBe('y')
+		expect(restart).toBe(true)
+	})
+	it('starts from the top when nothing survived a list that also got shorter', () => {
+		const { index, restart } = nextCursor(['a', 'b'], ['x'], 1)
+		expect(playing(['x'], index)).toBe('x')
+		expect(restart).toBe(true)
+	})
+	it('starts from the top when the playlist was empty before', () => {
+		expect(nextCursor([], ['a', 'b'], 7)).toEqual({ index: 0, restart: true })
+	})
+	it('has nothing to move to when the playlist is emptied', () => {
+		expect(nextCursor(['a', 'b'], [], 1)).toEqual({ index: 1, restart: false })
 	})
 })

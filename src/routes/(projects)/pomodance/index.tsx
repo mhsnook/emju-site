@@ -25,6 +25,7 @@ import {
 	loadYouTubeApi,
 	isThrowaway,
 	msFor,
+	nextCursor,
 	parseVideoId,
 	pomoFromDraft,
 	readPomos,
@@ -117,6 +118,8 @@ const weekday = (day: string) => dayLabel(day).split(',')[0]
 const PROGRESS_SAVE_MS = 5_000
 /** Long enough for a player told to play to have reached playing or buffering. */
 const PLAYBACK_CHECK_MS = 1_500
+/** How long after a track swap the player's own paused/ended events are its old song leaving. */
+const SWAP_SETTLE_MS = 1_000
 
 /** Whether sound is on its way out of this player, rather than waiting on a click. */
 function playbackUnderway(player: YTPlayer) {
@@ -160,6 +163,10 @@ function PomodancePage() {
 
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
 	const played = useRef<Record<Phase, boolean>>({ work: false, break: false })
+	// bumped whenever a phase should load its track afresh, so that playing the
+	// same song again — or the same song under a new index — still reads as a change
+	const [plays, setPlays] = useState<Record<Phase, number>>({ work: 0, break: 0 })
+	const swappedAt = useRef<Record<Phase, number>>({ work: 0, break: 0 })
 	const [playersReady, setPlayersReady] = useState(0)
 	const [musicBlocked, setMusicBlocked] = useState(false)
 
@@ -320,7 +327,7 @@ function PomodancePage() {
 				player.pauseVideo()
 			}
 		}
-		if (!running) setMusicBlocked(false)
+		if (!running || !players.current[phase]) setMusicBlocked(false)
 		return () => clearTimeout(check)
 	}, [phase, running, playersReady])
 
@@ -337,10 +344,32 @@ function PomodancePage() {
 		}
 	}, [musicBlocked, phase])
 
+	const beginSwap = (p: Phase) => {
+		swappedAt.current[p] = Date.now()
+		setPlays((n) => ({ ...n, [p]: n[p] + 1 }))
+	}
+
 	const setTrack = (p: Phase, index: number) => {
 		seconds.current[p] = 0
 		const next = { ...trackIndex, [p]: index }
 		setTrackIndex(next)
+		beginSwap(p)
+		persistCursors(next)
+	}
+
+	/**
+	 * An edit to the playlist leaves the song that is playing alone. Removing that
+	 * song is the one case that moves the cursor, on to whatever follows it.
+	 */
+	const updatePlaylist = (p: Phase, videos: string[]) => {
+		const cursor = nextCursor(settings.phases[p].videos, videos, trackIndex[p])
+		updatePhase(p, { videos })
+		const next = { ...trackIndex, [p]: cursor.index }
+		setTrackIndex(next)
+		if (cursor.restart) {
+			seconds.current[p] = 0
+			beginSwap(p)
+		}
 		persistCursors(next)
 	}
 
@@ -350,6 +379,10 @@ function PomodancePage() {
 			played.current[p] = true
 			if (p === phase) setMusicBlocked(false)
 		}
+		// a swapped-in track reports the old one pausing and ending on its way out;
+		// neither is the song finishing or the user reaching for the controls
+		const settling = Date.now() - swappedAt.current[p] < SWAP_SETTLE_MS
+		if (settling && (state === YT.PlayerState.ENDED || state === YT.PlayerState.PAUSED)) return
 		if (state === YT.PlayerState.ENDED) {
 			setTrack(p, trackIndex[p] + 1)
 			return
@@ -523,8 +556,9 @@ function PomodancePage() {
 								playing={phase === p && running}
 								videos={settings.phases[p].videos}
 								index={trackIndex[p]}
+								loadKey={plays[p]}
 								startSeconds={seconds.current[p]}
-								onPlaylistChange={(videos) => updatePhase(p, { videos })}
+								onPlaylistChange={(videos) => updatePlaylist(p, videos)}
 								onSelectTrack={(i) => setTrack(p, i)}
 								onReady={(player) => registerPlayer(p, player)}
 								onState={(s) => onPlayerStateRef.current(p, s)}
@@ -874,6 +908,7 @@ function PhaseVideo({
 	playing,
 	videos,
 	index,
+	loadKey,
 	startSeconds,
 	onPlaylistChange,
 	onSelectTrack,
@@ -885,6 +920,7 @@ function PhaseVideo({
 	playing: boolean
 	videos: string[]
 	index: number
+	loadKey: number
 	startSeconds: number
 	onPlaylistChange: (videos: string[]) => void
 	onSelectTrack: (index: number) => void
@@ -893,6 +929,9 @@ function PhaseVideo({
 }) {
 	const [draft, setDraft] = useState('')
 	const [invalid, setInvalid] = useState(false)
+	const [editingTrack, setEditingTrack] = useState<number | null>(null)
+	const [trackDraft, setTrackDraft] = useState('')
+	const [trackInvalid, setTrackInvalid] = useState(false)
 	const titleOf = useVideoTitles(videos)
 
 	const pos = trackPos(videos.length, index)
@@ -906,7 +945,23 @@ function PhaseVideo({
 		onPlaylistChange([...videos, id])
 	}
 
-	const remove = (i: number) => onPlaylistChange(videos.filter((_, n) => n !== i))
+	// a phase with an empty playlist has no soundtrack, so the last track is
+	// changed rather than taken away
+	const remove = (i: number) =>
+		videos.length > 1 && onPlaylistChange(videos.filter((_, n) => n !== i))
+
+	const startEdit = (i: number) => {
+		setEditingTrack(i)
+		setTrackDraft(videos[i])
+		setTrackInvalid(false)
+	}
+
+	const saveEdit = (i: number) => {
+		const id = parseVideoId(trackDraft)
+		if (!id) return setTrackInvalid(true)
+		setEditingTrack(null)
+		onPlaylistChange(videos.map((v, n) => (n === i ? id : v)))
+	}
 
 	return (
 		<div
@@ -925,7 +980,7 @@ function PhaseVideo({
 				{videoId ? (
 					<VideoFrame
 						videoId={videoId}
-						index={index}
+						loadKey={loadKey}
 						startSeconds={startSeconds}
 						autoplay={playing}
 						onReady={onReady}
@@ -967,25 +1022,80 @@ function PhaseVideo({
 								>
 									{i === pos ? '▶' : '▷'}
 								</button>
-								<a
-									href={`https://www.youtube.com/watch?v=${id}`}
-									target="_blank"
-									rel="noreferrer"
-									className="link link-hover flex-1 truncate"
-								>
-									{titleOf(id)}
-								</a>
-								<button
-									type="button"
-									id={`${phase}-playlist-remove-${i}`}
-									data-testid={`${phase}-playlist-remove-${i}`}
-									aria-label={`Remove: ${titleOf(id)}`}
-									title="Remove"
-									onClick={() => remove(i)}
-									className="btn btn-ghost btn-xs"
-								>
-									✕
-								</button>
+								{editingTrack === i ? (
+									<form
+										className="flex flex-1 items-center gap-2"
+										onSubmit={(e) => {
+											e.preventDefault()
+											saveEdit(i)
+										}}
+									>
+										<input
+											id={`${phase}-playlist-edit-input-${i}`}
+											data-testid={`${phase}-playlist-edit-input-${i}`}
+											autoFocus
+											value={trackDraft}
+											aria-label={`Youtube link for track ${i + 1}`}
+											onChange={(e) => {
+												setTrackDraft(e.target.value)
+												setTrackInvalid(false)
+											}}
+											className="input input-xs flex-1"
+										/>
+										<button
+											type="submit"
+											id={`${phase}-playlist-edit-save-${i}`}
+											data-testid={`${phase}-playlist-edit-save-${i}`}
+											className="btn btn-xs"
+										>
+											Save
+										</button>
+										<button
+											type="button"
+											id={`${phase}-playlist-edit-cancel-${i}`}
+											data-testid={`${phase}-playlist-edit-cancel-${i}`}
+											onClick={() => setEditingTrack(null)}
+											className="btn btn-ghost btn-xs"
+										>
+											Cancel
+										</button>
+									</form>
+								) : (
+									<>
+										<a
+											href={`https://www.youtube.com/watch?v=${id}`}
+											target="_blank"
+											rel="noreferrer"
+											className="link link-hover flex-1 truncate"
+										>
+											{titleOf(id)}
+										</a>
+										<button
+											type="button"
+											id={`${phase}-playlist-edit-${i}`}
+											data-testid={`${phase}-playlist-edit-${i}`}
+											aria-label={`Change the link for: ${titleOf(id)}`}
+											title="Change the link"
+											onClick={() => startEdit(i)}
+											className="btn btn-ghost btn-xs"
+										>
+											✎
+										</button>
+										{videos.length > 1 && (
+											<button
+												type="button"
+												id={`${phase}-playlist-remove-${i}`}
+												data-testid={`${phase}-playlist-remove-${i}`}
+												aria-label={`Remove: ${titleOf(id)}`}
+												title="Remove"
+												onClick={() => remove(i)}
+												className="btn btn-ghost btn-xs"
+											>
+												✕
+											</button>
+										)}
+									</>
+								)}
 							</li>
 						))}
 					</ol>
@@ -1016,12 +1126,13 @@ function PhaseVideo({
 							Add
 						</button>
 					</form>
-					{invalid && (
+					{(invalid || trackInvalid) && (
 						<p className="text-error text-xs">That doesn’t look like a youtube link.</p>
 					)}
 					<p className="text-xs opacity-60">
 						Each switch picks up where this playlist left off, then rolls on to the next
 						track.
+						{videos.length === 1 && ' The last track can be changed, but not taken away.'}
 					</p>
 				</div>
 			</details>
@@ -1031,14 +1142,14 @@ function PhaseVideo({
 
 function VideoFrame({
 	videoId,
-	index,
+	loadKey,
 	startSeconds,
 	autoplay,
 	onReady,
 	onState,
 }: {
 	videoId: string
-	index: number
+	loadKey: number
 	startSeconds: number
 	autoplay: boolean
 	onReady: (p: YTPlayer | null) => void
@@ -1046,7 +1157,7 @@ function VideoFrame({
 }) {
 	const mount = useRef<HTMLDivElement>(null)
 	const [player, setPlayer] = useState<YTPlayer | null>(null)
-	const trackKey = `${index}:${videoId}`
+	const trackKey = `${loadKey}:${videoId}`
 	const loaded = useRef<string | null>(null)
 
 	const latest = useRef({ videoId, trackKey, startSeconds, autoplay, onReady, onState })
