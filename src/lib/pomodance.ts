@@ -1,11 +1,14 @@
 export type Phase = 'work' | 'break'
 
+export type PhaseSettings = { videos: string[]; minutes: number }
+
 export type Settings = {
-	workVideo: string
-	breakVideo: string
-	workMinutes: number
-	breakMinutes: number
+	phases: Record<Phase, PhaseSettings>
+	showLedger: boolean
+	lessMotion: boolean
 }
+
+type Cursors = Record<Phase, { index: number; seconds: number }>
 
 export type Pomo = {
 	id: string
@@ -22,13 +25,15 @@ const SETTINGS_KEY = 'pomodance:settings'
 const POMOS_KEY = 'pomodance:pomos'
 const INTENTION_KEY = 'pomodance:intention'
 const DAY_KEY = 'pomodance:day'
-const LEDGER_KEY = 'pomodance:ledger-hidden'
+const CURSORS_KEY = 'pomodance:cursors'
 
 export const DEFAULT_SETTINGS: Settings = {
-	workVideo: 'jfKfPfyJRdk',
-	breakVideo: 'FGBhQbmPwH8',
-	workMinutes: 25,
-	breakMinutes: 5,
+	phases: {
+		work: { videos: ['jfKfPfyJRdk'], minutes: 25 },
+		break: { videos: ['FGBhQbmPwH8', 'dQw4w9WgXcQ'], minutes: 5 },
+	},
+	showLedger: true,
+	lessMotion: false,
 }
 
 /** Pomos shorter than this are discarded rather than filed. */
@@ -51,10 +56,45 @@ function write(key: string, value: unknown) {
 	localStorage.setItem(key, JSON.stringify(value))
 }
 
-export function loadSettings(): Settings {
-	return { ...DEFAULT_SETTINGS, ...read<Partial<Settings>>(SETTINGS_KEY, {}) }
+/**
+ * Fills in the defaults for anything a save is missing, and reduces every
+ * playlist entry to a bare video id so a position in the list and a playable
+ * track are the same thing.
+ */
+export function normalizeSettings(stored: unknown): Settings {
+	const s = (stored ?? {}) as Partial<Settings>
+	const phase = (p: Phase): PhaseSettings => {
+		const fallback = DEFAULT_SETTINGS.phases[p]
+		const saved = s.phases?.[p]
+		const minutes = saved?.minutes
+		return {
+			videos: saved?.videos
+				? saved.videos
+						.filter((v) => typeof v === 'string')
+						.map(parseVideoId)
+						.filter(Boolean)
+				: fallback.videos,
+			minutes: typeof minutes === 'number' && minutes > 0 ? minutes : fallback.minutes,
+		}
+	}
+	return {
+		phases: { work: phase('work'), break: phase('break') },
+		showLedger: s.showLedger ?? DEFAULT_SETTINGS.showLedger,
+		lessMotion: s.lessMotion ?? DEFAULT_SETTINGS.lessMotion,
+	}
 }
+
+export const loadSettings = () => normalizeSettings(read(SETTINGS_KEY, {}))
 export const saveSettings = (settings: Settings) => write(SETTINGS_KEY, settings)
+
+export function loadCursors(): Cursors {
+	const stored = read<Partial<Cursors>>(CURSORS_KEY, {})
+	return {
+		work: stored.work ?? { index: 0, seconds: 0 },
+		break: stored.break ?? { index: 0, seconds: 0 },
+	}
+}
+export const saveCursors = (cursors: Cursors) => write(CURSORS_KEY, cursors)
 
 /** Any pomo left open by a closed tab gets ended at the earlier of now or its full length. */
 export function loadPomos(workMinutes: number): Pomo[] {
@@ -77,9 +117,6 @@ export const saveIntention = (v: string) => write(INTENTION_KEY, v)
 
 export const loadDay = () => read<string | null>(DAY_KEY, null)
 export const saveDay = (day: string) => write(DAY_KEY, day)
-
-export const loadLedgerHidden = () => read<boolean>(LEDGER_KEY, false)
-export const saveLedgerHidden = (v: boolean) => write(LEDGER_KEY, v)
 
 export function workDayOf(date: Date): string {
 	const shifted = new Date(date.getTime() - DAY_ROLLOVER_HOURS * 3_600_000)
@@ -125,8 +162,17 @@ export function parseVideoId(input: string): string {
 	return ''
 }
 
+/**
+ * A cursor index counts tracks played rather than position in the list, so that
+ * advancing past the end of a one-track playlist still reads as a change.
+ */
+export const trackPos = (length: number, index: number) =>
+	length > 0 ? ((index % length) + length) % length : -1
+
+export const trackAt = (ids: string[], index: number) => ids[trackPos(ids.length, index)] ?? ''
+
 export function msFor(settings: Settings, phase: Phase) {
-	return (phase === 'work' ? settings.workMinutes : settings.breakMinutes) * 60_000
+	return settings.phases[phase].minutes * 60_000
 }
 
 export function formatClock(seconds: number) {
@@ -180,9 +226,15 @@ export const sounds = {
 
 // ---- youtube iframe api ----
 
+type VideoRequest = { videoId: string; startSeconds?: number }
+
 export type YTPlayer = {
 	playVideo(): void
 	pauseVideo(): void
+	loadVideoById(request: VideoRequest): void
+	cueVideoById(request: VideoRequest): void
+	getCurrentTime(): number
+	getPlayerState(): number
 	destroy(): void
 }
 
@@ -198,7 +250,7 @@ type YTNamespace = {
 			}
 		}
 	) => YTPlayer
-	PlayerState: { PLAYING: number; PAUSED: number }
+	PlayerState: { ENDED: number; PLAYING: number; PAUSED: number }
 }
 
 declare global {
@@ -223,6 +275,32 @@ export function loadYouTubeApi(): Promise<YTNamespace> {
 		document.head.appendChild(script)
 	})
 	return ytReady
+}
+
+// ---- video titles ----
+
+const titles = new Map<string, Promise<string | null>>()
+
+async function requestTitle(id: string): Promise<string | null> {
+	try {
+		const res = await fetch(
+			`https://www.youtube.com/oembed?format=json&url=${encodeURIComponent(
+				`https://www.youtube.com/watch?v=${id}`
+			)}`
+		)
+		if (!res.ok) return null
+		const { title } = (await res.json()) as { title?: string }
+		return title ?? null
+	} catch {
+		return null
+	}
+}
+
+/** Caches the promise, not the title, so a miss is not retried on every edit. */
+export function fetchVideoTitle(id: string): Promise<string | null> {
+	const pending = titles.get(id) ?? requestTitle(id)
+	titles.set(id, pending)
+	return pending
 }
 
 export function cn(...parts: Array<string | false | null | undefined>) {

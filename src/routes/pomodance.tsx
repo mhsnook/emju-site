@@ -3,30 +3,33 @@ import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'r
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { pomodance as copy } from '#/content/site'
 import {
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
+	fetchVideoTitle,
 	formatClock,
+	loadCursors,
 	loadDay,
 	loadIntention,
-	loadLedgerHidden,
 	loadPomos,
 	loadSettings,
 	loadYouTubeApi,
 	MIN_POMO_MS,
 	msFor,
 	parseVideoId,
+	saveCursors,
 	saveDay,
 	saveIntention,
-	saveLedgerHidden,
 	savePomos,
 	saveSettings,
 	sounds,
 	straddlesRollover,
+	trackAt,
+	trackPos,
 	workDayOf,
 	type Phase,
+	type PhaseSettings,
 	type Pomo,
 	type Settings,
 	type YTPlayer,
@@ -37,13 +40,25 @@ import pomodanceCss from '#/pomodance.css?url'
 export const Route = createFileRoute('/pomodance')({
 	ssr: false,
 	head: () => ({
-		meta: [{ title: `${copy.title} — EMJU` }, { name: 'description', content: copy.description }],
+		meta: [{ title: `${TITLE} — EMJU` }, { name: 'description', content: DESCRIPTION }],
 		links: [{ rel: 'stylesheet', href: pomodanceCss }],
 	}),
 	component: PomodancePage,
 })
 
+const TITLE = 'Pomodance'
+const DESCRIPTION =
+	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
+
 const PHASES: Phase[] = ['work', 'break']
+const PLAYLIST_HEADING: Record<Phase, string> = {
+	work: 'Work playlist',
+	break: 'Dance playlist',
+}
+const MINUTES_LABEL: Record<Phase, string> = {
+	work: 'Work minutes',
+	break: 'Break minutes',
+}
 
 // endsAt set means running; remainingMs is only meaningful while endsAt is null.
 type Timer = { phase: Phase; endsAt: number | null; remainingMs: number }
@@ -73,22 +88,34 @@ const minutesBetween = (a: string, b: string) =>
 	Math.round((Date.parse(b) - Date.parse(a)) / 60_000)
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
+const PROGRESS_SAVE_MS = 5_000
+
 function PomodancePage() {
 	const [settings, setSettings] = useState<Settings>(loadSettings)
+	const [restored] = useState(loadCursors)
+	const [trackIndex, setTrackIndex] = useState<Record<Phase, number>>({
+		work: restored.work.index,
+		break: restored.break.index,
+	})
+	// nothing renders the playback position, so it stays out of state and the
+	// page does not re-render every time it is saved
+	const seconds = useRef<Record<Phase, number>>({
+		work: restored.work.seconds,
+		break: restored.break.seconds,
+	})
 	const [timer, dispatch] = useReducer(timerReducer, {
 		phase: 'work',
 		endsAt: null,
 		remainingMs: msFor(settings, 'work'),
 	} satisfies Timer)
-	const [secondsLeft, setSecondsLeft] = useState(0)
 	const [intention, setIntention] = useState(loadIntention)
-	const [pomos, setPomos] = useState(() => loadPomos(settings.workMinutes))
+	const [pomos, setPomos] = useState(() => loadPomos(settings.phases.work.minutes))
 	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
-	const [ledgerHidden, setLedgerHidden] = useState(loadLedgerHidden)
 
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
 	const [askRollover, setAskRollover] = useState(false)
+	const [showSettings, setShowSettings] = useState(false)
 
 	const players = useRef<Record<Phase, YTPlayer | null>>({ work: null, break: null })
 	const [playersReady, setPlayersReady] = useState(0)
@@ -156,22 +183,35 @@ function PomodancePage() {
 		sounds.ring()
 		switchTo(phase === 'work' ? 'break' : 'work', true)
 	}
-	const completeRef = useRef(complete)
-	completeRef.current = complete
+	const persistCursors = (index: Record<Phase, number>) =>
+		saveCursors({
+			work: { index: index.work, seconds: seconds.current.work },
+			break: { index: index.break, seconds: seconds.current.break },
+		})
 
-	// tick from the wall clock so a backgrounded tab still finishes on time
-	useEffect(() => {
-		const endsAt = timer.endsAt
-		if (endsAt === null) return
-		const tick = () => {
-			const left = endsAt - Date.now()
-			if (left > 0) setSecondsLeft(Math.ceil(left / 1000))
-			else completeRef.current()
+	// A paused player keeps its own position, so resuming a phase needs no help.
+	// The saved seconds are for the next page load.
+	const captureProgress = (p: Phase) => {
+		const player = players.current[p]
+		const YT = window.YT
+		if (!player || !YT) return
+		try {
+			const state = player.getPlayerState()
+			if (state !== YT.PlayerState.PLAYING && state !== YT.PlayerState.PAUSED) return
+			seconds.current[p] = Math.max(0, Math.floor(player.getCurrentTime()))
+			persistCursors(trackIndex)
+		} catch {
+			/* player went away mid-read */
 		}
-		tick()
-		const id = setInterval(tick, 250)
+	}
+	const captureRef = useRef(captureProgress)
+	captureRef.current = captureProgress
+
+	useEffect(() => {
+		if (!running) return
+		const id = setInterval(() => captureRef.current(phase), PROGRESS_SAVE_MS)
 		return () => clearInterval(id)
-	}, [timer.endsAt])
+	}, [running, phase])
 
 	// the players follow the timer; only the active phase's player may drive it back.
 	// pressing play on the other one is a request to switch phases, so it gets
@@ -181,12 +221,26 @@ function PomodancePage() {
 			const player = players.current[p]
 			if (!player) continue
 			if (p === phase && running) player.playVideo()
-			else player.pauseVideo()
+			else {
+				captureRef.current(p)
+				player.pauseVideo()
+			}
 		}
 	}, [phase, running, playersReady])
 
+	const setTrack = (p: Phase, index: number) => {
+		seconds.current[p] = 0
+		const next = { ...trackIndex, [p]: index }
+		setTrackIndex(next)
+		persistCursors(next)
+	}
+
 	const onPlayerState = (p: Phase, state: number) => {
 		const YT = window.YT!
+		if (state === YT.PlayerState.ENDED) {
+			setTrack(p, trackIndex[p] + 1)
+			return
+		}
 		if (p !== phase) {
 			if (state !== YT.PlayerState.PLAYING) return
 			if (running) {
@@ -215,6 +269,11 @@ function PomodancePage() {
 		if (idle) switchTo(phase, false, next)
 	}
 
+	const updatePhase = (p: Phase, patch: Partial<PhaseSettings>) =>
+		updateSettings({
+			phases: { ...settings.phases, [p]: { ...settings.phases[p], ...patch } },
+		})
+
 	const updateIntention = (value: string) => {
 		setIntention(value)
 		saveIntention(value)
@@ -227,32 +286,33 @@ function PomodancePage() {
 		setReview(null)
 	}
 
-	const toggleLedger = () => {
-		setLedgerHidden(!ledgerHidden)
-		saveLedgerHidden(!ledgerHidden)
-	}
-
-	const clock = formatClock(running ? secondsLeft : Math.ceil(timer.remainingMs / 1000))
-
-	useEffect(() => {
-		document.title = `${clock} ${isBreak ? '💃' : '🍅'} ${copy.title}`
-	}, [clock, isBreak])
-
 	const today = workDayOf(new Date())
 
 	return (
 		<div
 			data-testid="pomodance-page"
 			data-theme="emju-dark"
-			className={cn('pomo', isBreak && 'is-break')}
+			className={cn('pomo', isBreak && 'is-break', settings.lessMotion && 'is-calm')}
 		>
-			<div className={cn('grid gap-6 p-6', !ledgerHidden && 'lg:grid-cols-[1fr_20rem]')}>
+			<div className={cn('grid gap-6 p-6', settings.showLedger && 'lg:grid-cols-[1fr_20rem]')}>
 				<div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
-					<header className="flex flex-wrap items-baseline justify-between gap-4">
-						<h1 className="font-display text-3xl">
-							{isBreak ? copy.breakHeading : copy.workHeading}
-						</h1>
-						<p className="font-ui text-sm opacity-70">{copy.description}</p>
+					<header className="flex items-start justify-between gap-4">
+						<div className="flex flex-col gap-1">
+							<h1 className="font-display text-3xl">
+								{isBreak ? '💃 break time 🕺' : '🍅 pomodance'}
+							</h1>
+							<p className="font-ui text-sm opacity-70">{DESCRIPTION}</p>
+						</div>
+						<button
+							type="button"
+							data-testid="settings-button"
+							aria-label="Settings"
+							title="Settings"
+							onClick={() => setShowSettings(true)}
+							className="btn btn-circle btn-ghost shrink-0 text-xl"
+						>
+							⚙
+						</button>
 					</header>
 
 					{isBreak && (
@@ -264,13 +324,12 @@ function PomodancePage() {
 					)}
 
 					<section className="flex flex-col items-center gap-4">
-						<div
-							data-testid="clock"
-							className="pomo-clock font-display text-[clamp(4rem,20vw,11rem)] leading-none font-bold tabular-nums"
-							aria-live="polite"
-						>
-							{clock}
-						</div>
+						<Clock
+							endsAt={timer.endsAt}
+							remainingMs={timer.remainingMs}
+							isBreak={isBreak}
+							onComplete={complete}
+						/>
 						<div className="flex flex-wrap justify-center gap-3">
 							<button
 								data-testid="start-button"
@@ -297,84 +356,78 @@ function PomodancePage() {
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label={copy.intentionLabel}
+							label="Intention for this pomo"
 							value={intention}
 							onChange={updateIntention}
-							placeholder={copy.intentionPlaceholder}
+							placeholder="what are you going to do?"
 						/>
 					</section>
 
-					<section className="grid gap-4 md:grid-cols-3">
-						<VideoSlot
-							testId="work-video"
-							videoId={parseVideoId(settings.workVideo)}
-							active={!isBreak}
-							label="work & chill"
-							onReady={(p) => registerPlayer('work', p)}
-							onState={(s) => onPlayerStateRef.current('work', s)}
-						/>
-						<VideoSlot
-							testId="break-video"
-							videoId={parseVideoId(settings.breakVideo)}
-							active={isBreak}
-							label="break time"
-							onReady={(p) => registerPlayer('break', p)}
-							onState={(s) => onPlayerStateRef.current('break', s)}
-						/>
+					<section className="grid items-start gap-4 md:grid-cols-3">
+						{PHASES.map((p) => (
+							<PhaseVideo
+								key={p}
+								phase={p}
+								active={phase === p}
+								playing={phase === p && running}
+								videos={settings.phases[p].videos}
+								index={trackIndex[p]}
+								startSeconds={seconds.current[p]}
+								onPlaylistChange={(videos) => updatePhase(p, { videos })}
+								onSelectTrack={(i) => setTrack(p, i)}
+								onReady={(player) => registerPlayer(p, player)}
+								onState={(s) => onPlayerStateRef.current(p, s)}
+							/>
+						))}
 					</section>
-
-					<div className="font-ui flex justify-between text-sm">
-						<details data-testid="settings" className="opacity-80 open:opacity-100">
-							<summary className="cursor-pointer">Settings</summary>
-							<div className="mt-3 grid gap-3 sm:grid-cols-2">
-								<SettingInput
-									testId="work-video-input"
-									label="Work video (youtube url or id)"
-									value={settings.workVideo}
-									onChange={(v) => updateSettings({ workVideo: v })}
-								/>
-								<SettingInput
-									testId="break-video-input"
-									label="Break video (youtube url or id)"
-									value={settings.breakVideo}
-									onChange={(v) => updateSettings({ breakVideo: v })}
-								/>
-								<SettingInput
-									testId="work-minutes-input"
-									label="Work minutes"
-									type="number"
-									value={String(settings.workMinutes)}
-									onChange={(v) =>
-										updateSettings({
-											workMinutes: clampMinutes(v, DEFAULT_SETTINGS.workMinutes),
-										})
-									}
-								/>
-								<SettingInput
-									testId="break-minutes-input"
-									label="Break minutes"
-									type="number"
-									value={String(settings.breakMinutes)}
-									onChange={(v) =>
-										updateSettings({
-											breakMinutes: clampMinutes(v, DEFAULT_SETTINGS.breakMinutes),
-										})
-									}
-								/>
-							</div>
-						</details>
-						<button
-							data-testid="ledger-toggle"
-							onClick={toggleLedger}
-							className="btn btn-ghost btn-sm"
-						>
-							{ledgerHidden ? 'Show ledger' : 'Hide ledger'}
-						</button>
-					</div>
 				</div>
 
-				{!ledgerHidden && <Ledger pomos={pomos} day={day} />}
+				{settings.showLedger && <Ledger pomos={pomos} day={day} />}
 			</div>
+
+			{showSettings && (
+				<Modal testId="settings-dialog" onDismiss={() => setShowSettings(false)}>
+					<h2 className="font-display text-2xl">Settings</h2>
+					<div className="grid gap-3 sm:grid-cols-2">
+						{PHASES.map((p) => (
+							<SettingInput
+								key={p}
+								testId={`${p}-minutes-input`}
+								label={MINUTES_LABEL[p]}
+								type="number"
+								value={String(settings.phases[p].minutes)}
+								onChange={(v) =>
+									updatePhase(p, {
+										minutes: clampMinutes(v, DEFAULT_SETTINGS.phases[p].minutes),
+									})
+								}
+							/>
+						))}
+					</div>
+					<Toggle
+						testId="ledger-toggle"
+						label="Show the ledger"
+						checked={settings.showLedger}
+						onChange={(v) => updateSettings({ showLedger: v })}
+					/>
+					<Toggle
+						testId="less-motion-toggle"
+						label="Less motion"
+						hint="Calmer colours and no wobbling while the dance music plays."
+						checked={settings.lessMotion}
+						onChange={(v) => updateSettings({ lessMotion: v })}
+					/>
+					<div className="modal-action">
+						<button
+							type="button"
+							className="btn btn-primary"
+							onClick={() => setShowSettings(false)}
+						>
+							Done
+						</button>
+					</div>
+				</Modal>
+			)}
 
 			{review && (
 				<ReviewDialog
@@ -388,8 +441,8 @@ function PomodancePage() {
 				<Modal testId="confirm-switch-dialog" onDismiss={() => setConfirmSwitch(null)}>
 					<h2 className="font-display text-2xl">
 						{confirmSwitch === 'break'
-							? copy.confirmSwitch.toBreak
-							: copy.confirmSwitch.toWork}
+							? 'End the pomo and start the break?'
+							: 'End the break and get back to work?'}
 					</h2>
 					<div className="modal-action">
 						<button
@@ -397,7 +450,7 @@ function PomodancePage() {
 							className="btn btn-outline"
 							onClick={() => setConfirmSwitch(null)}
 						>
-							{copy.confirmSwitch.stay}
+							No, stay
 						</button>
 						<button
 							type="button"
@@ -408,7 +461,7 @@ function PomodancePage() {
 								setConfirmSwitch(null)
 							}}
 						>
-							{copy.confirmSwitch.go}
+							Yes, switch
 						</button>
 					</div>
 				</Modal>
@@ -416,7 +469,7 @@ function PomodancePage() {
 
 			{askRollover && (
 				<Modal testId="rollover-dialog" onDismiss={() => setAskRollover(false)}>
-					<h2 className="font-display text-2xl">{copy.rollover.title}</h2>
+					<h2 className="font-display text-2xl">It’s past 4am</h2>
 					<p>
 						Still working late on {dayLabel(day)}, or is this {dayLabel(today)} now?
 					</p>
@@ -442,6 +495,50 @@ function PomodancePage() {
 					</div>
 				</Modal>
 			)}
+		</div>
+	)
+}
+
+function Clock({
+	endsAt,
+	remainingMs,
+	isBreak,
+	onComplete,
+}: {
+	endsAt: number | null
+	remainingMs: number
+	isBreak: boolean
+	onComplete: () => void
+}) {
+	const [secondsLeft, setSecondsLeft] = useState(() => Math.ceil(remainingMs / 1000))
+	const complete = useRef(onComplete)
+	complete.current = onComplete
+
+	// tick from the wall clock so a backgrounded tab still finishes on time
+	useEffect(() => {
+		if (endsAt === null) return setSecondsLeft(Math.ceil(remainingMs / 1000))
+		const tick = () => {
+			const left = endsAt - Date.now()
+			if (left > 0) setSecondsLeft(Math.ceil(left / 1000))
+			else complete.current()
+		}
+		tick()
+		const id = setInterval(tick, 250)
+		return () => clearInterval(id)
+	}, [endsAt, remainingMs])
+
+	const text = formatClock(secondsLeft)
+	useEffect(() => {
+		document.title = `${text} ${isBreak ? '💃' : '🍅'} ${TITLE}`
+	}, [text, isBreak])
+
+	return (
+		<div
+			data-testid="clock"
+			className="pomo-clock font-display text-[clamp(4rem,20vw,11rem)] leading-none font-bold tabular-nums"
+			aria-live="polite"
+		>
+			{text}
 		</div>
 	)
 }
@@ -484,71 +581,275 @@ function SettingInput({
 	)
 }
 
-function VideoSlot({
+function Toggle({
 	testId,
-	videoId,
-	active,
 	label,
+	hint,
+	checked,
+	onChange,
+}: {
+	testId: string
+	label: string
+	hint?: string
+	checked: boolean
+	onChange: (v: boolean) => void
+}) {
+	return (
+		<label className="font-ui flex cursor-pointer items-start gap-3 text-sm">
+			<input
+				data-testid={testId}
+				type="checkbox"
+				checked={checked}
+				onChange={(e) => onChange(e.target.checked)}
+				className="toggle toggle-primary"
+			/>
+			<span className="flex flex-col">
+				<span>{label}</span>
+				{hint && <span className="opacity-60">{hint}</span>}
+			</span>
+		</label>
+	)
+}
+
+function useVideoTitles(ids: string[]) {
+	const [titles, setTitles] = useState<Record<string, string>>({})
+	const key = ids.join(',')
+
+	useEffect(() => {
+		let cancelled = false
+		for (const id of key ? key.split(',') : []) {
+			void fetchVideoTitle(id).then((title) => {
+				if (title && !cancelled) setTitles((t) => (t[id] ? t : { ...t, [id]: title }))
+			})
+		}
+		return () => {
+			cancelled = true
+		}
+	}, [key])
+
+	return (id: string) => titles[id] ?? id
+}
+
+function PhaseVideo({
+	phase,
+	active,
+	playing,
+	videos,
+	index,
+	startSeconds,
+	onPlaylistChange,
+	onSelectTrack,
 	onReady,
 	onState,
 }: {
-	testId: string
-	videoId: string
+	phase: Phase
 	active: boolean
-	label: string
+	playing: boolean
+	videos: string[]
+	index: number
+	startSeconds: number
+	onPlaylistChange: (videos: string[]) => void
+	onSelectTrack: (index: number) => void
 	onReady: (p: YTPlayer | null) => void
 	onState: (state: number) => void
 }) {
-	const mount = useRef<HTMLDivElement>(null)
-	const callbacks = useRef({ onReady, onState })
-	callbacks.current = { onReady, onState }
+	const [draft, setDraft] = useState('')
+	const [invalid, setInvalid] = useState(false)
+	const titleOf = useVideoTitles(videos)
 
-	useEffect(() => {
-		if (!videoId || !mount.current) return
-		let player: YTPlayer | null = null
-		let cancelled = false
-		const host = document.createElement('div')
-		mount.current.replaceChildren(host)
-		void loadYouTubeApi().then((YT) => {
-			if (cancelled) return
-			player = new YT.Player(host, {
-				videoId,
-				playerVars: { loop: 1, playlist: videoId, rel: 0, playsinline: 1 },
-				events: {
-					onReady: () => callbacks.current.onReady(player),
-					onStateChange: (e) => callbacks.current.onState(e.data),
-				},
-			})
-		})
-		return () => {
-			cancelled = true
-			callbacks.current.onReady(null)
-			player?.destroy()
-		}
-	}, [videoId])
+	const pos = trackPos(videos.length, index)
+	const videoId = trackAt(videos, index)
+
+	const add = () => {
+		const id = parseVideoId(draft)
+		if (!id) return setInvalid(true)
+		setInvalid(false)
+		setDraft('')
+		onPlaylistChange([...videos, id])
+	}
+
+	const remove = (i: number) => onPlaylistChange(videos.filter((_, n) => n !== i))
 
 	return (
 		<div
-			data-testid={testId}
+			data-testid={`${phase}-video`}
 			className={cn(
 				'flex flex-col gap-2 transition-all',
 				active ? 'pomo-video-main md:col-span-2' : 'opacity-60 hover:opacity-100 md:col-span-1'
 			)}
 		>
 			<span className="font-ui text-xs tracking-wide uppercase opacity-70">
-				{label} {active && '· now playing'}
+				{PLAYLIST_HEADING[phase]}
+				{videos.length > 1 && ` · ${pos + 1}/${videos.length}`}
+				{active && ' · now playing'}
 			</span>
 			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
 				{videoId ? (
-					<div ref={mount} className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
+					<VideoFrame
+						videoId={videoId}
+						index={index}
+						startSeconds={startSeconds}
+						autoplay={playing}
+						onReady={onReady}
+						onState={onState}
+					/>
 				) : (
 					<p className="p-4 text-sm opacity-70">
-						Paste a youtube link for the {label} video in settings.
+						No videos yet. Paste a youtube link to give this half of the timer a soundtrack.
 					</p>
 				)}
 			</div>
+
+			<details
+				data-testid={`${phase}-playlist`}
+				className="font-ui text-sm opacity-80 open:opacity-100"
+			>
+				<summary data-testid={`${phase}-playlist-toggle`} className="cursor-pointer">
+					Playlist ({videos.length})
+				</summary>
+				<div className="mt-2 flex flex-col gap-2">
+					<ol className="flex flex-col gap-1">
+						{videos.map((id, i) => (
+							<li key={`${id}-${i}`} className="flex items-center gap-2">
+								<button
+									type="button"
+									data-testid={`${phase}-playlist-play-${i}`}
+									title="Play this one next"
+									aria-label={`Play this one next: ${titleOf(id)}`}
+									onClick={() => onSelectTrack(i)}
+									className={cn(
+										'btn btn-ghost btn-xs',
+										i === pos && 'text-[var(--pomo-accent)]'
+									)}
+								>
+									{i === pos ? '▶' : '▷'}
+								</button>
+								<a
+									href={`https://www.youtube.com/watch?v=${id}`}
+									target="_blank"
+									rel="noreferrer"
+									className="link link-hover flex-1 truncate"
+								>
+									{titleOf(id)}
+								</a>
+								<button
+									type="button"
+									data-testid={`${phase}-playlist-remove-${i}`}
+									aria-label={`Remove: ${titleOf(id)}`}
+									title="Remove"
+									onClick={() => remove(i)}
+									className="btn btn-ghost btn-xs"
+								>
+									✕
+								</button>
+							</li>
+						))}
+					</ol>
+					<form
+						className="flex gap-2"
+						onSubmit={(e) => {
+							e.preventDefault()
+							add()
+						}}
+					>
+						<input
+							data-testid={`${phase}-playlist-input`}
+							value={draft}
+							placeholder="Paste a youtube link or id"
+							onChange={(e) => {
+								setDraft(e.target.value)
+								setInvalid(false)
+							}}
+							className="input input-sm flex-1"
+						/>
+						<button
+							type="submit"
+							data-testid={`${phase}-playlist-add`}
+							className="btn btn-sm"
+						>
+							Add
+						</button>
+					</form>
+					{invalid && (
+						<p className="text-error text-xs">That doesn’t look like a youtube link.</p>
+					)}
+					<p className="text-xs opacity-60">
+						Each switch picks up where this playlist left off, then rolls on to the next
+						track.
+					</p>
+				</div>
+			</details>
 		</div>
 	)
+}
+
+function VideoFrame({
+	videoId,
+	index,
+	startSeconds,
+	autoplay,
+	onReady,
+	onState,
+}: {
+	videoId: string
+	index: number
+	startSeconds: number
+	autoplay: boolean
+	onReady: (p: YTPlayer | null) => void
+	onState: (state: number) => void
+}) {
+	const mount = useRef<HTMLDivElement>(null)
+	const [player, setPlayer] = useState<YTPlayer | null>(null)
+	const trackKey = `${index}:${videoId}`
+	const loaded = useRef<string | null>(null)
+
+	const latest = useRef({ videoId, trackKey, startSeconds, autoplay, onReady, onState })
+	latest.current = { videoId, trackKey, startSeconds, autoplay, onReady, onState }
+
+	// One player per phase for the life of the page; tracks are swapped into it
+	// below, because tearing the iframe down between songs loses the API handle.
+	useEffect(() => {
+		if (!mount.current) return
+		const { videoId: id, startSeconds: at, trackKey: key } = latest.current
+		let created: YTPlayer | null = null
+		let cancelled = false
+		const host = document.createElement('div')
+		mount.current.replaceChildren(host)
+		loaded.current = key
+		void loadYouTubeApi().then((YT) => {
+			if (cancelled) return
+			created = new YT.Player(host, {
+				videoId: id,
+				playerVars: { rel: 0, playsinline: 1, start: Math.floor(at) },
+				events: {
+					onReady: () => {
+						setPlayer(created)
+						latest.current.onReady(created)
+					},
+					onStateChange: (e) => latest.current.onState(e.data),
+				},
+			})
+		})
+		return () => {
+			cancelled = true
+			loaded.current = null
+			setPlayer(null)
+			latest.current.onReady(null)
+			created?.destroy()
+		}
+	}, [])
+
+	useEffect(() => {
+		if (!player || loaded.current === trackKey) return
+		loaded.current = trackKey
+		const { videoId: id, startSeconds: at, autoplay: play } = latest.current
+		if (!id) return
+		const request = { videoId: id, startSeconds: Math.floor(at) }
+		if (play) player.loadVideoById(request)
+		else player.cueVideoById(request)
+	}, [trackKey, player])
+
+	return <div ref={mount} className="h-full w-full [&>iframe]:h-full [&>iframe]:w-full" />
 }
 
 function Modal({
@@ -611,7 +912,9 @@ function ReviewDialog({
 					Pomo done: {minutesBetween(pomo.start, pomo.end!)}m, started {fmtTime(pomo.start)}
 				</h2>
 				<p className="text-sm opacity-75">
-					{pomo.intention ? copy.review.withIntention : copy.review.withoutIntention}
+					{pomo.intention
+						? 'Here was your intention. Is that what you worked on, or do you want to put something else?'
+						: 'No intention was set. What did you work on?'}
 				</p>
 				<textarea
 					data-testid="review-note"
@@ -629,10 +932,10 @@ function ReviewDialog({
 						className="btn btn-outline"
 						onClick={() => onSave(text, true)}
 					>
-						{copy.review.done}
+						Yep, and I’m done with it
 					</button>
 					<button type="submit" data-testid="review-keep" className="btn btn-primary">
-						{copy.review.keep}
+						Yep, keep it as my intention
 					</button>
 				</div>
 			</form>

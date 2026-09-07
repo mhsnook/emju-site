@@ -160,29 +160,3 @@ export const nav = [
 	{ label: 'Project Ideas', href: '/#potentials' },
 	{ label: 'Contact', href: '/contact' },
 ] as const
-
-export const pomodance = {
-	title: 'Pomodance',
-	description:
-		'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.',
-	workHeading: '🍅 pomodance',
-	breakHeading: '💃 break time 🕺',
-	intentionLabel: 'Intention for this pomo',
-	intentionPlaceholder: 'what are you going to do?',
-	review: {
-		withIntention:
-			'Here was your intention. Is that what you worked on, or do you want to put something else?',
-		withoutIntention: 'No intention was set. What did you work on?',
-		keep: 'Yep, keep it as my intention',
-		done: "Yep, and I'm done with it",
-	},
-	confirmSwitch: {
-		toBreak: 'End the pomo and start the break?',
-		toWork: 'End the break and get back to work?',
-		stay: 'No, stay',
-		go: 'Yes, switch',
-	},
-	rollover: {
-		title: "It's past 4am",
-	},
-} as const

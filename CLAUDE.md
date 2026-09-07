@@ -9,7 +9,10 @@ Marketing site for EMJU (a consulting firm). Two pages: front page (`/`) and con
 
 ## Conventions
 
-- **Content is data.** All copy lives in `src/content/site.ts`. Edit copy there, not in JSX.
+- **Content is data.** Marketing copy for the front page and contact page lives in
+  `src/content/site.ts` — edit it there, not in JSX. Keep that file to site content only, so
+  it stays easy to move to a CMS later; app UI strings (the `/pomodance` route's buttons,
+  dialogs and labels) belong inline in the components that render them.
 - **Fonts:** use the `font-display` class (Instrument Serif) for headings, `font-ui`
   (Instrument Sans) for labels/nav/buttons. Body text defaults to Atkinson Hyperlegible.
 - **Styling:** Tailwind v4 + daisyUI v5. The theme (`emju` / `emju-dark`) is defined in

@@ -112,6 +112,26 @@
 	}
 }
 
+.pomo.is-break.is-calm {
+	--pomo-accent: #ffd166;
+	background: #3b2a52;
+}
+
+/* content:none removes the gradient layer outright, so it needs no animation reset */
+.pomo.is-break.is-calm::before {
+	content: none;
+}
+
+.pomo.is-break.is-calm .pomo-clock {
+	animation: none;
+	text-shadow: none;
+}
+
+.pomo.is-break.is-calm .pomo-video-main,
+.pomo.is-calm .pomo-dancers span {
+	animation: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.pomo.is-break::before,
 	.pomo.is-break .pomo-clock,
