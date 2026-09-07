@@ -3,7 +3,6 @@ import { memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'r
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
-import { pomodance as copy } from '#/content/site'
 import {
 	cn,
 	DEFAULT_SETTINGS,
@@ -41,13 +40,25 @@ import pomodanceCss from '#/pomodance.css?url'
 export const Route = createFileRoute('/pomodance')({
 	ssr: false,
 	head: () => ({
-		meta: [{ title: `${copy.title} — EMJU` }, { name: 'description', content: copy.description }],
+		meta: [{ title: `${TITLE} — EMJU` }, { name: 'description', content: DESCRIPTION }],
 		links: [{ rel: 'stylesheet', href: pomodanceCss }],
 	}),
 	component: PomodancePage,
 })
 
+const TITLE = 'Pomodance'
+const DESCRIPTION =
+	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
+
 const PHASES: Phase[] = ['work', 'break']
+const PLAYLIST_HEADING: Record<Phase, string> = {
+	work: 'Work playlist',
+	break: 'Dance playlist',
+}
+const MINUTES_LABEL: Record<Phase, string> = {
+	work: 'Work minutes',
+	break: 'Break minutes',
+}
 
 // endsAt set means running; remainingMs is only meaningful while endsAt is null.
 type Timer = { phase: Phase; endsAt: number | null; remainingMs: number }
@@ -288,15 +299,15 @@ function PomodancePage() {
 					<header className="flex items-start justify-between gap-4">
 						<div className="flex flex-col gap-1">
 							<h1 className="font-display text-3xl">
-								{isBreak ? copy.breakHeading : copy.workHeading}
+								{isBreak ? '💃 break time 🕺' : '🍅 pomodance'}
 							</h1>
-							<p className="font-ui text-sm opacity-70">{copy.description}</p>
+							<p className="font-ui text-sm opacity-70">{DESCRIPTION}</p>
 						</div>
 						<button
 							type="button"
 							data-testid="settings-button"
-							aria-label={copy.settings.open}
-							title={copy.settings.open}
+							aria-label="Settings"
+							title="Settings"
 							onClick={() => setShowSettings(true)}
 							className="btn btn-circle btn-ghost shrink-0 text-xl"
 						>
@@ -345,10 +356,10 @@ function PomodancePage() {
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label={copy.intentionLabel}
+							label="Intention for this pomo"
 							value={intention}
 							onChange={updateIntention}
-							placeholder={copy.intentionPlaceholder}
+							placeholder="what are you going to do?"
 						/>
 					</section>
 
@@ -376,13 +387,13 @@ function PomodancePage() {
 
 			{showSettings && (
 				<Modal testId="settings-dialog" onDismiss={() => setShowSettings(false)}>
-					<h2 className="font-display text-2xl">{copy.settings.title}</h2>
+					<h2 className="font-display text-2xl">Settings</h2>
 					<div className="grid gap-3 sm:grid-cols-2">
 						{PHASES.map((p) => (
 							<SettingInput
 								key={p}
 								testId={`${p}-minutes-input`}
-								label={copy.settings.minutes[p]}
+								label={MINUTES_LABEL[p]}
 								type="number"
 								value={String(settings.phases[p].minutes)}
 								onChange={(v) =>
@@ -395,14 +406,14 @@ function PomodancePage() {
 					</div>
 					<Toggle
 						testId="ledger-toggle"
-						label={copy.settings.showLedger}
+						label="Show the ledger"
 						checked={settings.showLedger}
 						onChange={(v) => updateSettings({ showLedger: v })}
 					/>
 					<Toggle
 						testId="less-motion-toggle"
-						label={copy.settings.lessMotion}
-						hint={copy.settings.lessMotionHint}
+						label="Less motion"
+						hint="Calmer colours and no wobbling while the dance music plays."
 						checked={settings.lessMotion}
 						onChange={(v) => updateSettings({ lessMotion: v })}
 					/>
@@ -412,7 +423,7 @@ function PomodancePage() {
 							className="btn btn-primary"
 							onClick={() => setShowSettings(false)}
 						>
-							{copy.settings.close}
+							Done
 						</button>
 					</div>
 				</Modal>
@@ -430,8 +441,8 @@ function PomodancePage() {
 				<Modal testId="confirm-switch-dialog" onDismiss={() => setConfirmSwitch(null)}>
 					<h2 className="font-display text-2xl">
 						{confirmSwitch === 'break'
-							? copy.confirmSwitch.toBreak
-							: copy.confirmSwitch.toWork}
+							? 'End the pomo and start the break?'
+							: 'End the break and get back to work?'}
 					</h2>
 					<div className="modal-action">
 						<button
@@ -439,7 +450,7 @@ function PomodancePage() {
 							className="btn btn-outline"
 							onClick={() => setConfirmSwitch(null)}
 						>
-							{copy.confirmSwitch.stay}
+							No, stay
 						</button>
 						<button
 							type="button"
@@ -450,7 +461,7 @@ function PomodancePage() {
 								setConfirmSwitch(null)
 							}}
 						>
-							{copy.confirmSwitch.go}
+							Yes, switch
 						</button>
 					</div>
 				</Modal>
@@ -458,7 +469,7 @@ function PomodancePage() {
 
 			{askRollover && (
 				<Modal testId="rollover-dialog" onDismiss={() => setAskRollover(false)}>
-					<h2 className="font-display text-2xl">{copy.rollover.title}</h2>
+					<h2 className="font-display text-2xl">It’s past 4am</h2>
 					<p>
 						Still working late on {dayLabel(day)}, or is this {dayLabel(today)} now?
 					</p>
@@ -518,7 +529,7 @@ function Clock({
 
 	const text = formatClock(secondsLeft)
 	useEffect(() => {
-		document.title = `${text} ${isBreak ? '💃' : '🍅'} ${copy.title}`
+		document.title = `${text} ${isBreak ? '💃' : '🍅'} ${TITLE}`
 	}, [text, isBreak])
 
 	return (
@@ -668,9 +679,9 @@ function PhaseVideo({
 			)}
 		>
 			<span className="font-ui text-xs tracking-wide uppercase opacity-70">
-				{copy.playlist.heading[phase]}
+				{PLAYLIST_HEADING[phase]}
 				{videos.length > 1 && ` · ${pos + 1}/${videos.length}`}
-				{active && ` · ${copy.playlist.nowPlaying}`}
+				{active && ' · now playing'}
 			</span>
 			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
 				{videoId ? (
@@ -683,7 +694,9 @@ function PhaseVideo({
 						onState={onState}
 					/>
 				) : (
-					<p className="p-4 text-sm opacity-70">{copy.playlist.empty}</p>
+					<p className="p-4 text-sm opacity-70">
+						No videos yet. Paste a youtube link to give this half of the timer a soundtrack.
+					</p>
 				)}
 			</div>
 
@@ -692,7 +705,7 @@ function PhaseVideo({
 				className="font-ui text-sm opacity-80 open:opacity-100"
 			>
 				<summary data-testid={`${phase}-playlist-toggle`} className="cursor-pointer">
-					{copy.playlist.summary} ({videos.length})
+					Playlist ({videos.length})
 				</summary>
 				<div className="mt-2 flex flex-col gap-2">
 					<ol className="flex flex-col gap-1">
@@ -701,8 +714,8 @@ function PhaseVideo({
 								<button
 									type="button"
 									data-testid={`${phase}-playlist-play-${i}`}
-									title={copy.playlist.play}
-									aria-label={`${copy.playlist.play}: ${titleOf(id)}`}
+									title="Play this one next"
+									aria-label={`Play this one next: ${titleOf(id)}`}
 									onClick={() => onSelectTrack(i)}
 									className={cn(
 										'btn btn-ghost btn-xs',
@@ -722,8 +735,8 @@ function PhaseVideo({
 								<button
 									type="button"
 									data-testid={`${phase}-playlist-remove-${i}`}
-									aria-label={`${copy.playlist.remove}: ${titleOf(id)}`}
-									title={copy.playlist.remove}
+									aria-label={`Remove: ${titleOf(id)}`}
+									title="Remove"
 									onClick={() => remove(i)}
 									className="btn btn-ghost btn-xs"
 								>
@@ -742,7 +755,7 @@ function PhaseVideo({
 						<input
 							data-testid={`${phase}-playlist-input`}
 							value={draft}
-							placeholder={copy.playlist.add}
+							placeholder="Paste a youtube link or id"
 							onChange={(e) => {
 								setDraft(e.target.value)
 								setInvalid(false)
@@ -754,11 +767,16 @@ function PhaseVideo({
 							data-testid={`${phase}-playlist-add`}
 							className="btn btn-sm"
 						>
-							{copy.playlist.addAction}
+							Add
 						</button>
 					</form>
-					{invalid && <p className="text-error text-xs">{copy.playlist.invalid}</p>}
-					<p className="text-xs opacity-60">{copy.playlist.hint}</p>
+					{invalid && (
+						<p className="text-error text-xs">That doesn’t look like a youtube link.</p>
+					)}
+					<p className="text-xs opacity-60">
+						Each switch picks up where this playlist left off, then rolls on to the next
+						track.
+					</p>
 				</div>
 			</details>
 		</div>
@@ -894,7 +912,9 @@ function ReviewDialog({
 					Pomo done: {minutesBetween(pomo.start, pomo.end!)}m, started {fmtTime(pomo.start)}
 				</h2>
 				<p className="text-sm opacity-75">
-					{pomo.intention ? copy.review.withIntention : copy.review.withoutIntention}
+					{pomo.intention
+						? 'Here was your intention. Is that what you worked on, or do you want to put something else?'
+						: 'No intention was set. What did you work on?'}
 				</p>
 				<textarea
 					data-testid="review-note"
@@ -912,10 +932,10 @@ function ReviewDialog({
 						className="btn btn-outline"
 						onClick={() => onSave(text, true)}
 					>
-						{copy.review.done}
+						Yep, and I’m done with it
 					</button>
 					<button type="submit" data-testid="review-keep" className="btn btn-primary">
-						{copy.review.keep}
+						Yep, keep it as my intention
 					</button>
 				</div>
 			</form>
