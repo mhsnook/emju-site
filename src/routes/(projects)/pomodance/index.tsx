@@ -387,6 +387,7 @@ function PomodancePage() {
 						</div>
 						<button
 							type="button"
+							id="pomo-settings"
 							data-testid="settings-button"
 							aria-label="Settings"
 							title="Settings"
@@ -412,8 +413,11 @@ function PomodancePage() {
 							isBreak={isBreak}
 							onComplete={complete}
 						/>
+						{/* the ids are what the keyboard scene actor tells focus stops apart by
+						    (tag name + id), so four bare buttons in a row read as a tab cycle */}
 						<div className="flex flex-wrap justify-center gap-3">
 							<button
+								id="pomo-start"
 								data-testid="start-button"
 								onClick={() => (running ? pause() : start())}
 								className="btn btn-lg rounded-full border-0 bg-[var(--pomo-accent)] font-bold text-black hover:scale-105 hover:bg-[var(--pomo-accent)]"
@@ -421,6 +425,7 @@ function PomodancePage() {
 								{running ? 'Pause' : idle ? 'Start' : 'Resume'}
 							</button>
 							<button
+								id="pomo-reset"
 								data-testid="reset-button"
 								onClick={() => switchTo(phase, false)}
 								className="btn btn-lg btn-outline rounded-full"
@@ -428,6 +433,7 @@ function PomodancePage() {
 								Reset
 							</button>
 							<button
+								id="pomo-switch"
 								data-testid="switch-button"
 								onClick={() => switchTo(isBreak ? 'work' : 'break', true)}
 								className="btn btn-lg btn-outline rounded-full"
@@ -714,6 +720,7 @@ function SettingInput({
 		<label className={cn('font-ui flex flex-col gap-1 text-sm', className)}>
 			<span className="opacity-70">{label}</span>
 			<input
+				id={testId}
 				data-testid={testId}
 				type={type}
 				min={type === 'number' ? 1 : undefined}
@@ -742,6 +749,7 @@ function Toggle({
 	return (
 		<label className="font-ui flex cursor-pointer items-start gap-3 text-sm">
 			<input
+				id={testId}
 				data-testid={testId}
 				type="checkbox"
 				checked={checked}
@@ -849,7 +857,11 @@ function PhaseVideo({
 				data-testid={`${phase}-playlist`}
 				className="font-ui text-sm opacity-80 open:opacity-100"
 			>
-				<summary data-testid={`${phase}-playlist-toggle`} className="cursor-pointer">
+				<summary
+					id={`${phase}-playlist-toggle`}
+					data-testid={`${phase}-playlist-toggle`}
+					className="cursor-pointer"
+				>
 					Playlist ({videos.length})
 				</summary>
 				<div className="mt-2 flex flex-col gap-2">
@@ -858,6 +870,7 @@ function PhaseVideo({
 							<li key={`${id}-${i}`} className="flex items-center gap-2">
 								<button
 									type="button"
+									id={`${phase}-playlist-play-${i}`}
 									data-testid={`${phase}-playlist-play-${i}`}
 									title="Play this one next"
 									aria-label={`Play this one next: ${titleOf(id)}`}
@@ -879,6 +892,7 @@ function PhaseVideo({
 								</a>
 								<button
 									type="button"
+									id={`${phase}-playlist-remove-${i}`}
 									data-testid={`${phase}-playlist-remove-${i}`}
 									aria-label={`Remove: ${titleOf(id)}`}
 									title="Remove"
@@ -898,6 +912,7 @@ function PhaseVideo({
 						}}
 					>
 						<input
+							id={`${phase}-playlist-input`}
 							data-testid={`${phase}-playlist-input`}
 							value={draft}
 							placeholder="Paste a youtube link or id"
@@ -909,6 +924,7 @@ function PhaseVideo({
 						/>
 						<button
 							type="submit"
+							id={`${phase}-playlist-add`}
 							data-testid={`${phase}-playlist-add`}
 							className="btn btn-sm"
 						>

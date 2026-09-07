@@ -8,7 +8,7 @@ visitor:
 - see main-content
 - see site-header
 - see hero
-- seeText We build the tech your team is missing.
+- seeText Software Consulting & Incubation
 - see services
 - see service-card #1
 - see projects
