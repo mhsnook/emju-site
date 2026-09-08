@@ -1,4 +1,5 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { FastForward, Minus, Pause, Play, Plus, Rewind, RotateCcw, SkipForward } from 'lucide-react'
 import { Fragment, memo, useEffect, useReducer, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -18,6 +19,7 @@ import {
 	formatDuration,
 	isFresh,
 	keepIfSame,
+	lastUnreviewed,
 	loadCursors,
 	loadDay,
 	loadIntention,
@@ -27,11 +29,13 @@ import {
 	loadYouTubeApi,
 	isThrowaway,
 	msFor,
+	otherPhase,
 	parseVideoId,
 	pastDays,
 	pomoFromDraft,
 	readPomos,
 	readTimer,
+	remainingIn,
 	remainingOf,
 	resolveDay,
 	resumablePomo,
@@ -41,9 +45,11 @@ import {
 	savePomos,
 	saveSettings,
 	saveTimer,
+	scrubTimer,
 	sounds,
 	STORAGE_PREFIX,
 	straddlesRollover,
+	timerAt,
 	trackAt,
 	trackPos,
 	workDayOf,
@@ -92,7 +98,7 @@ const MINUTES_LABEL: Record<Phase, string> = {
 type TimerAction =
 	| { type: 'start'; now: number }
 	| { type: 'pause'; now: number }
-	| { type: 'switch'; phase: Phase; durationMs: number; running: boolean; now: number }
+	| { type: 'set'; timer: Timer }
 	| { type: 'restore'; timer: Timer }
 
 function timerReducer(t: Timer, a: TimerAction): Timer {
@@ -100,13 +106,9 @@ function timerReducer(t: Timer, a: TimerAction): Timer {
 		case 'start':
 			return t.endsAt ? t : { ...t, endsAt: a.now + t.remainingMs }
 		case 'pause':
-			return t.endsAt ? { ...t, endsAt: null, remainingMs: Math.max(0, t.endsAt - a.now) } : t
-		case 'switch':
-			return {
-				phase: a.phase,
-				remainingMs: a.durationMs,
-				endsAt: a.running ? a.now + a.durationMs : null,
-			}
+			return t.endsAt ? { ...t, endsAt: null, remainingMs: remainingIn(t, a.now) } : t
+		case 'set':
+			return a.timer
 		case 'restore':
 			return keepIfSame(t, a.timer)
 	}
@@ -118,6 +120,8 @@ const minutesBetween = (a: string, b: string) =>
 	Math.round((Date.parse(b) - Date.parse(a)) / 60_000)
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
+/** How far one press of the nudge or scrub controls moves the clock. */
+const NUDGE_MS = 60_000
 const PROGRESS_SAVE_MS = 5_000
 /** Long enough for a player told to play to have reached playing or buffering. */
 const PLAYBACK_CHECK_MS = 1_500
@@ -173,6 +177,9 @@ function PomodancePage() {
 	const isBreak = phase === 'break'
 	const idle = isFresh(timer, settings)
 	const current = pomos.find((p) => p.end === null) ?? null
+	// enter puts you back to work: it starts a fresh session either way, and picks
+	// a paused pomo back up, but it will not start a break you stopped on purpose
+	const enterStarts = !running && (idle || phase === 'work')
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
@@ -235,6 +242,12 @@ function PomodancePage() {
 		setReview(closed)
 	}
 
+	/** Puts a finished pomo back in progress, and drops the review that finished it. */
+	const reopenPomo = (pomo: Pomo) => {
+		patchPomo(pomo.id, { end: null })
+		setReview((r) => (r?.id === pomo.id ? null : r))
+	}
+
 	const startTimer = (now: number) => {
 		sounds.beep()
 		dispatch({ type: 'start', now })
@@ -253,15 +266,10 @@ function PomodancePage() {
 	const resumePomo = (pomo: Pomo) => {
 		const now = Date.now()
 		sounds.beep()
-		patchPomo(pomo.id, { end: null })
+		reopenPomo(pomo)
 		if (pomo.intention && !intention) updateIntention(pomo.intention)
-		dispatch({
-			type: 'switch',
-			phase: 'work',
-			durationMs: remainingOf(pomo, msFor(settings, 'work')),
-			running: true,
-			now,
-		})
+		const left = remainingOf(pomo, msFor(settings, 'work'))
+		dispatch({ type: 'set', timer: timerAt('work', left, true, now) })
 		setAskResume(null)
 	}
 	const pause = () => {
@@ -271,15 +279,26 @@ function PomodancePage() {
 	}
 	const switchTo = (next: Phase, autostart: boolean, s = settings) => {
 		const now = Date.now()
-		dispatch({ type: 'switch', phase: next, durationMs: msFor(s, next), running: autostart, now })
+		dispatch({ type: 'set', timer: timerAt(next, msFor(s, next), autostart, now) })
 		if (phase === 'work') closePomo(now)
 		if (next === 'work' && autostart) openPomo(now)
 	}
 
-	const complete = () => {
+	const finish = (autostart: boolean) => {
 		sounds.ring()
-		switchTo(phase === 'work' ? 'break' : 'work', true)
+		switchTo(otherPhase(phase), autostart)
 	}
+	const complete = () => finish(true)
+
+	/** Adds or takes a minute off this session alone; the soundtrack stays put. */
+	const stretch = (deltaMs: number) => {
+		const now = Date.now()
+		const remaining = remainingIn(timer, now) + deltaMs
+		if (remaining <= 0) return finish(running)
+		sounds.click()
+		dispatch({ type: 'set', timer: timerAt(phase, remaining, running, now) })
+	}
+
 	const persistCursors = (index: Record<Phase, number>) =>
 		saveCursors({
 			work: { index: index.work, seconds: seconds.current.work },
@@ -303,6 +322,41 @@ function PomodancePage() {
 	}
 	const captureRef = useRef(captureProgress)
 	captureRef.current = captureProgress
+
+	// seekTo leaves a paused player paused but starts a cued one, so anything that
+	// is not the phase being played gets told to stop again afterwards
+	const seekPhase = (p: Phase, deltaSeconds: number, playing: boolean) => {
+		const player = players.current[p]
+		if (!player || !deltaSeconds) return
+		try {
+			const at = Math.max(0, player.getCurrentTime() + deltaSeconds)
+			player.seekTo(at, true)
+			seconds.current[p] = Math.floor(at)
+			if (!playing) player.pauseVideo()
+		} catch {
+			/* player went away mid-seek */
+		}
+	}
+
+	/** Moves the clock and both soundtracks together, a minute at a time. */
+	const scrub = (deltaMs: number) => {
+		const now = Date.now()
+		const { timer: next, seek } = scrubTimer(timer, settings, deltaMs, now)
+		for (const p of PHASES) seekPhase(p, seek[p], running && p === next.phase)
+		persistCursors(trackIndex)
+		if (next.phase === phase) sounds.click()
+		else {
+			sounds.ring()
+			if (next.phase === 'break') closePomo(now)
+			else {
+				// the break ended a pomo this is taking back; anything else starts a new one
+				const last = lastUnreviewed(pomos, day)
+				if (last) reopenPomo(last)
+				else openPomo(now)
+			}
+		}
+		dispatch({ type: 'set', timer: next })
+	}
 
 	useEffect(() => {
 		if (!running) return
@@ -456,51 +510,101 @@ function PomodancePage() {
 					)}
 
 					<section className="flex flex-col items-center gap-4">
-						<Clock
-							endsAt={timer.endsAt}
-							remainingMs={timer.remainingMs}
-							isBreak={isBreak}
-							onComplete={complete}
-						/>
+						<div className="flex items-center justify-center gap-4">
+							<Clock
+								endsAt={timer.endsAt}
+								remainingMs={timer.remainingMs}
+								isBreak={isBreak}
+								onComplete={complete}
+							/>
+							<div className="flex flex-col gap-2">
+								<TransportButton
+									id="pomo-longer"
+									testId="longer-button"
+									label="Longer"
+									title="Make this session a minute longer"
+									onClick={() => stretch(NUDGE_MS)}
+									className="size-8 border border-current/30"
+								>
+									<Plus className="size-5" />
+								</TransportButton>
+								<TransportButton
+									id="pomo-shorter"
+									testId="shorter-button"
+									label="Shorter"
+									title="Make this session a minute shorter"
+									onClick={() => stretch(-NUDGE_MS)}
+									className="size-8 border border-current/30"
+								>
+									<Minus className="size-5" />
+								</TransportButton>
+							</div>
+						</div>
 						{/* the ids are what the keyboard scene actor tells focus stops apart by
-						    (tag name + id), so four bare buttons in a row read as a tab cycle */}
-						<div className="flex flex-wrap justify-center gap-3">
-							<button
-								id="pomo-start"
-								data-testid="start-button"
-								onClick={() => (running ? pause() : start())}
-								className="btn btn-lg rounded-full border-0 bg-[var(--pomo-accent)] font-bold text-black hover:scale-105 hover:bg-[var(--pomo-accent)]"
-							>
-								{running ? 'Pause' : idle ? 'Start' : 'Resume'}
-							</button>
-							<button
+						    (tag name + id), so bare buttons in a row read as a tab cycle */}
+						<div className="flex items-center justify-center gap-3">
+							<TransportButton
 								id="pomo-reset"
-								data-testid="reset-button"
+								testId="reset-button"
+								label="Start over"
 								onClick={() => switchTo(phase, false)}
-								className="btn btn-lg btn-outline rounded-full"
+								className="size-11"
 							>
-								Reset
-							</button>
-							<button
+								<RotateCcw className="size-5" />
+							</TransportButton>
+							<TransportButton
+								id="pomo-back"
+								testId="back-button"
+								label="Back a minute"
+								title="Back a minute, music and all"
+								onClick={() => scrub(-NUDGE_MS)}
+								className="size-11"
+							>
+								<Rewind className="size-5" />
+							</TransportButton>
+							<TransportButton
+								id="pomo-start"
+								testId="start-button"
+								label={running ? 'Pause' : 'Start'}
+								title={running ? 'Pause' : idle ? 'Start' : 'Resume'}
+								onClick={() => (running ? pause() : start())}
+								className="size-16 border-0 bg-[var(--pomo-accent)] text-black hover:scale-105 hover:bg-[var(--pomo-accent)]"
+							>
+								{running ? (
+									<Pause className="size-7 fill-current" />
+								) : (
+									<Play className="size-7 fill-current" />
+								)}
+							</TransportButton>
+							<TransportButton
+								id="pomo-forward"
+								testId="forward-button"
+								label="Forward a minute"
+								title="Forward a minute, music and all"
+								onClick={() => scrub(NUDGE_MS)}
+								className="size-11"
+							>
+								<FastForward className="size-5" />
+							</TransportButton>
+							<TransportButton
 								id="pomo-switch"
-								data-testid="switch-button"
-								onClick={() => switchTo(isBreak ? 'work' : 'break', true)}
-								className="btn btn-lg btn-outline rounded-full"
+								testId="switch-button"
+								label={isBreak ? 'Back to work' : 'Skip to break'}
+								onClick={() => switchTo(otherPhase(phase), true)}
+								className="size-11"
 							>
-								{isBreak ? 'Back to work' : 'Skip to break'}
-							</button>
+								<SkipForward className="size-5" />
+							</TransportButton>
 						</div>
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label={
-								idle
-									? 'Intention for this pomo — enter to start'
-									: 'Intention for this pomo'
-							}
+							label={`Intention for this pomo${
+								enterStarts ? (idle ? ' — enter to start' : ' — enter to resume') : ''
+							}`}
 							value={intention}
 							onChange={updateIntention}
-							onEnter={idle ? start : undefined}
+							onEnter={enterStarts ? start : undefined}
 							placeholder="what are you going to do?"
 						/>
 					</section>
@@ -585,6 +689,7 @@ function PomodancePage() {
 					<div className="modal-action">
 						<button
 							type="button"
+							data-testid="settings-done"
 							className="btn btn-primary"
 							onClick={() => setShowSettings(false)}
 						>
@@ -788,6 +893,42 @@ function Clock({
 		>
 			{text}
 		</div>
+	)
+}
+
+/**
+ * One of the round controls under the clock. `className` carries the size, which
+ * is also the hit box: daisyUI's own min-height would otherwise win over it.
+ */
+function TransportButton({
+	id,
+	testId,
+	label,
+	title,
+	onClick,
+	className,
+	children,
+}: {
+	id: string
+	testId: string
+	label: string
+	title?: string
+	onClick: () => void
+	className?: string
+	children: ReactNode
+}) {
+	return (
+		<button
+			type="button"
+			id={id}
+			data-testid={testId}
+			aria-label={label}
+			title={title ?? label}
+			onClick={onClick}
+			className={cn('btn btn-circle btn-ghost min-h-0 p-0', className)}
+		>
+			{children}
+		</button>
 	)
 }
 
