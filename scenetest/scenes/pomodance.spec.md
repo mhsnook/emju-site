@@ -45,24 +45,30 @@ visitor:
 - see ledger-entry #1
 - seeText start me with the keyboard
 
-# visitor can nudge the clock and the soundtrack a minute at a time
+# visitor can nudge the clock a minute at a time
+
+<!-- a stopped clock does not tick, so each nudge lands on an exact minute -->
 
 visitor:
 
 - openTo /pomodance
 - see pomodance-page
 - wait 1000
-- typeInto intention-input 'nudge me about'
-- click start-button
-- see Pause
-- click forward-button
-- click back-button
-- click longer-button
+- seeText 25:00
 - click shorter-button
+- seeText 24:00
+- click longer-button
+- seeText 25:00
+- click forward-button
+- seeText 24:00
+- click back-button
+- seeText 25:00
+- click start-button
 - see Pause
 - see ledger-entry #1
 - click reset-button
 - see Start
+- seeText 25:00
 
 # a minute forward at the end of a pomo rolls on into the break
 

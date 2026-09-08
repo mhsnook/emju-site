@@ -19,6 +19,7 @@ import {
 	formatDuration,
 	isFresh,
 	keepIfSame,
+	lastUnreviewed,
 	loadCursors,
 	loadDay,
 	loadIntention,
@@ -28,7 +29,6 @@ import {
 	loadYouTubeApi,
 	isThrowaway,
 	msFor,
-	NUDGE_MS,
 	otherPhase,
 	parseVideoId,
 	pastDays,
@@ -49,6 +49,7 @@ import {
 	sounds,
 	STORAGE_PREFIX,
 	straddlesRollover,
+	timerAt,
 	trackAt,
 	trackPos,
 	workDayOf,
@@ -97,9 +98,7 @@ const MINUTES_LABEL: Record<Phase, string> = {
 type TimerAction =
 	| { type: 'start'; now: number }
 	| { type: 'pause'; now: number }
-	| { type: 'switch'; phase: Phase; durationMs: number; running: boolean; now: number }
-	| { type: 'stretch'; remainingMs: number; now: number }
-	| { type: 'scrub'; timer: Timer }
+	| { type: 'set'; timer: Timer }
 	| { type: 'restore'; timer: Timer }
 
 function timerReducer(t: Timer, a: TimerAction): Timer {
@@ -107,20 +106,8 @@ function timerReducer(t: Timer, a: TimerAction): Timer {
 		case 'start':
 			return t.endsAt ? t : { ...t, endsAt: a.now + t.remainingMs }
 		case 'pause':
-			return t.endsAt ? { ...t, endsAt: null, remainingMs: Math.max(0, t.endsAt - a.now) } : t
-		case 'switch':
-			return {
-				phase: a.phase,
-				remainingMs: a.durationMs,
-				endsAt: a.running ? a.now + a.durationMs : null,
-			}
-		case 'stretch':
-			return {
-				...t,
-				remainingMs: a.remainingMs,
-				endsAt: t.endsAt === null ? null : a.now + a.remainingMs,
-			}
-		case 'scrub':
+			return t.endsAt ? { ...t, endsAt: null, remainingMs: remainingIn(t, a.now) } : t
+		case 'set':
 			return a.timer
 		case 'restore':
 			return keepIfSame(t, a.timer)
@@ -133,6 +120,8 @@ const minutesBetween = (a: string, b: string) =>
 	Math.round((Date.parse(b) - Date.parse(a)) / 60_000)
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
+/** How far one press of the nudge or scrub controls moves the clock. */
+const NUDGE_MS = 60_000
 const PROGRESS_SAVE_MS = 5_000
 /** Long enough for a player told to play to have reached playing or buffering. */
 const PLAYBACK_CHECK_MS = 1_500
@@ -250,6 +239,12 @@ function PomodancePage() {
 		setReview(closed)
 	}
 
+	/** Puts a finished pomo back in progress, and drops the review that finished it. */
+	const reopenPomo = (pomo: Pomo) => {
+		patchPomo(pomo.id, { end: null })
+		setReview((r) => (r?.id === pomo.id ? null : r))
+	}
+
 	const startTimer = (now: number) => {
 		sounds.beep()
 		dispatch({ type: 'start', now })
@@ -268,15 +263,10 @@ function PomodancePage() {
 	const resumePomo = (pomo: Pomo) => {
 		const now = Date.now()
 		sounds.beep()
-		patchPomo(pomo.id, { end: null })
+		reopenPomo(pomo)
 		if (pomo.intention && !intention) updateIntention(pomo.intention)
-		dispatch({
-			type: 'switch',
-			phase: 'work',
-			durationMs: remainingOf(pomo, msFor(settings, 'work')),
-			running: true,
-			now,
-		})
+		const left = remainingOf(pomo, msFor(settings, 'work'))
+		dispatch({ type: 'set', timer: timerAt('work', left, true, now) })
 		setAskResume(null)
 	}
 	const pause = () => {
@@ -286,7 +276,7 @@ function PomodancePage() {
 	}
 	const switchTo = (next: Phase, autostart: boolean, s = settings) => {
 		const now = Date.now()
-		dispatch({ type: 'switch', phase: next, durationMs: msFor(s, next), running: autostart, now })
+		dispatch({ type: 'set', timer: timerAt(next, msFor(s, next), autostart, now) })
 		if (phase === 'work') closePomo(now)
 		if (next === 'work' && autostart) openPomo(now)
 	}
@@ -303,7 +293,7 @@ function PomodancePage() {
 		const remaining = remainingIn(timer, now) + deltaMs
 		if (remaining <= 0) return finish(running)
 		sounds.click()
-		dispatch({ type: 'stretch', remainingMs: remaining, now })
+		dispatch({ type: 'set', timer: timerAt(phase, remaining, running, now) })
 	}
 
 	const persistCursors = (index: Record<Phase, number>) =>
@@ -345,14 +335,6 @@ function PomodancePage() {
 		}
 	}
 
-	/** Scrubbing back into work picks up the pomo the break had ended. */
-	const reopenPomo = (now: number) => {
-		const last = pomos.at(-1)
-		if (!last?.end || last.confirmed || last.day !== day) return openPomo(now)
-		patchPomo(last.id, { end: null })
-		setReview((r) => (r?.id === last.id ? null : r))
-	}
-
 	/** Moves the clock and both soundtracks together, a minute at a time. */
 	const scrub = (deltaMs: number) => {
 		const now = Date.now()
@@ -363,9 +345,14 @@ function PomodancePage() {
 		else {
 			sounds.ring()
 			if (next.phase === 'break') closePomo(now)
-			else reopenPomo(now)
+			else {
+				// the break ended a pomo this is taking back; anything else starts a new one
+				const last = lastUnreviewed(pomos, day)
+				if (last) reopenPomo(last)
+				else openPomo(now)
+			}
 		}
-		dispatch({ type: 'scrub', timer: next })
+		dispatch({ type: 'set', timer: next })
 	}
 
 	useEffect(() => {
