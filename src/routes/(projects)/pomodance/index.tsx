@@ -75,7 +75,14 @@ export const Route = createFileRoute('/(projects)/pomodance/')({
 			{ property: 'og:description', content: DESCRIPTION },
 			{ property: 'og:type', content: 'website' },
 			{ property: 'og:url', content: PAGE_URL },
+			{ property: 'og:image', content: OG_IMAGE },
+			{ property: 'og:image:type', content: 'image/png' },
+			{ property: 'og:image:width', content: '512' },
+			{ property: 'og:image:height', content: '512' },
+			{ property: 'og:image:alt', content: 'A tomato' },
+			// square art, so the small card rather than the wide one
 			{ name: 'twitter:card', content: 'summary' },
+			{ name: 'twitter:image', content: OG_IMAGE },
 		],
 		links: [
 			{ rel: 'canonical', href: PAGE_URL },
@@ -88,6 +95,8 @@ export const Route = createFileRoute('/(projects)/pomodance/')({
 const TITLE = 'Pomodance'
 const PAGE_TITLE = 'Pomodance: a Pomodoro timer slash break-time dance-off'
 const PAGE_URL = `${company.site}/pomodance`
+// og:image is fetched by a crawler with no page context, so it has to be absolute
+const OG_IMAGE = `${company.site}/pomodance-og.png`
 const DESCRIPTION =
 	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
 
