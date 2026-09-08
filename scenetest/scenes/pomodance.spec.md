@@ -44,6 +44,12 @@ visitor:
 - see Pause
 - see ledger-entry #1
 - seeText start me with the keyboard
+- click start-button
+- see Start
+- seeText enter to resume
+- click intention-input
+- pressKey Enter
+- see Pause
 
 # visitor can nudge the clock a minute at a time
 

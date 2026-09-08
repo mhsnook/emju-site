@@ -177,6 +177,9 @@ function PomodancePage() {
 	const isBreak = phase === 'break'
 	const idle = isFresh(timer, settings)
 	const current = pomos.find((p) => p.end === null) ?? null
+	// enter puts you back to work: it starts a fresh session either way, and picks
+	// a paused pomo back up, but it will not start a break you stopped on purpose
+	const enterStarts = !running && (idle || phase === 'work')
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
@@ -596,14 +599,12 @@ function PomodancePage() {
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label={
-								idle
-									? 'Intention for this pomo — enter to start'
-									: 'Intention for this pomo'
-							}
+							label={`Intention for this pomo${
+								enterStarts ? (idle ? ' — enter to start' : ' — enter to resume') : ''
+							}`}
 							value={intention}
 							onChange={updateIntention}
-							onEnter={idle ? start : undefined}
+							onEnter={enterStarts ? start : undefined}
 							placeholder="what are you going to do?"
 						/>
 					</section>
