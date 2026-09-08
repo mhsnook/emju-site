@@ -509,7 +509,12 @@ function PomodancePage() {
 						</div>
 					)}
 
-					<section className="flex flex-col items-center gap-4">
+					{/* sticky ranges over the parent's box, so this sits directly in the
+					    full-height column rather than inside a section with the input below */}
+					<div
+						data-testid="timer-controls"
+						className="pomo-controls flex flex-col items-center gap-4 pt-3 pb-8"
+					>
 						<div className="flex items-center justify-center gap-4">
 							<Clock
 								endsAt={timer.endsAt}
@@ -541,7 +546,7 @@ function PomodancePage() {
 							</div>
 						</div>
 						{/* the ids are what the keyboard scene actor tells focus stops apart by
-						    (tag name + id), so bare buttons in a row read as a tab cycle */}
+					    (tag name + id), so bare buttons in a row read as a tab cycle */}
 						<div className="flex items-center justify-center gap-3">
 							<TransportButton
 								id="pomo-reset"
@@ -596,18 +601,18 @@ function PomodancePage() {
 								<SkipForward className="size-5" />
 							</TransportButton>
 						</div>
-						<SettingInput
-							testId="intention-input"
-							className="w-full max-w-xl"
-							label={`Intention for this pomo${
-								enterStarts ? (idle ? ' — enter to start' : ' — enter to resume') : ''
-							}`}
-							value={intention}
-							onChange={updateIntention}
-							onEnter={enterStarts ? start : undefined}
-							placeholder="what are you going to do?"
-						/>
-					</section>
+					</div>
+					<SettingInput
+						testId="intention-input"
+						className="mx-auto w-full max-w-xl"
+						label={`Intention for this pomo${
+							enterStarts ? (idle ? ' — enter to start' : ' — enter to resume') : ''
+						}`}
+						value={intention}
+						onChange={updateIntention}
+						onEnter={enterStarts ? start : undefined}
+						placeholder="what are you going to do?"
+					/>
 
 					{musicBlocked && (
 						<div
@@ -888,7 +893,7 @@ function Clock({
 	return (
 		<div
 			data-testid="clock"
-			className="pomo-clock font-display text-[clamp(4rem,20vw,11rem)] leading-none font-bold tabular-nums"
+			className="pomo-clock font-display text-[clamp(4rem,min(20vw,24vh),11rem)] leading-none font-bold tabular-nums"
 			aria-live="polite"
 		>
 			{text}
