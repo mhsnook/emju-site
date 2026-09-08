@@ -17,11 +17,11 @@ visitor:
 - wait 1000
 - typeInto intention-input 'write a scene'
 - click start-button
-- seeText Pause
+- see Pause
 - see ledger-entry #1
 - click switch-button
 - seeText break time
-- seeText Back to work
+- see Pause
 - click settings-button
 - see settings-dialog
 - click ledger-toggle
@@ -41,9 +41,47 @@ visitor:
 - seeText Intention for this pomo — enter to start
 - typeInto intention-input 'start me with the keyboard'
 - pressKey Enter
-- seeText Pause
+- see Pause
 - see ledger-entry #1
 - seeText start me with the keyboard
+
+# visitor can nudge the clock and the soundtrack a minute at a time
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- typeInto intention-input 'nudge me about'
+- click start-button
+- see Pause
+- click forward-button
+- click back-button
+- click longer-button
+- click shorter-button
+- see Pause
+- see ledger-entry #1
+- click reset-button
+- see Start
+
+# a minute forward at the end of a pomo rolls on into the break
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- click settings-button
+- see settings-dialog
+- typeInto work-minutes-input '1'
+- click settings-done
+- notSee settings-dialog
+- click start-button
+- see Pause
+- click forward-button
+- seeText break time
+- click back-button
+- see ledger-entry #1
 
 # a running pomo survives a reload
 
@@ -54,13 +92,13 @@ visitor:
 - wait 1000
 - typeInto intention-input 'keep the pomo going'
 - click start-button
-- seeText Pause
+- see Pause
 - see ledger-entry #1
 - wait 1000
 - openTo /pomodance
 - see pomodance-page
 - wait 1000
-- seeText Pause
+- see Pause
 - see ledger-entry #1
 - seeText keep the pomo going
 

@@ -385,6 +385,59 @@ export const readTimer = (): Timer | null => {
 
 export const saveTimer = (timer: Timer) => write(TIMER_KEY, { ...timer, savedAt: Date.now() })
 
+export const otherPhase = (phase: Phase): Phase => (phase === 'work' ? 'break' : 'work')
+
+/** How far one press of the nudge or scrub controls moves the clock. */
+export const NUDGE_MS = 60_000
+
+/** What is left on the clock, whether it is counting down or stopped. */
+export const remainingIn = (timer: Timer, now: number) =>
+	Math.max(0, timer.endsAt === null ? timer.remainingMs : timer.endsAt - now)
+
+export type Scrub = {
+	timer: Timer
+	/** seconds to move each phase's video by, so the soundtrack lands where the clock does */
+	seek: Record<Phase, number>
+}
+
+/**
+ * Where a nudge of ±deltaMs leaves the clock, and how far each soundtrack moves
+ * with it. A nudge that runs off either end of the phase carries the rest of
+ * itself into the neighbouring phase and takes both videos along: the phase
+ * being left runs its video out to the edge of the phase, and the phase being
+ * joined moves its own video by whatever is left over.
+ */
+export function scrubTimer(timer: Timer, settings: Settings, deltaMs: number, now: number): Scrub {
+	const duration = msFor(settings, timer.phase)
+	const elapsed = Math.min(Math.max(0, duration - remainingIn(timer, now)), duration)
+	const target = elapsed + deltaMs
+	const running = timer.endsAt !== null
+	const at = (phase: Phase, remainingMs: number): Timer => ({
+		phase,
+		remainingMs,
+		endsAt: running ? now + remainingMs : null,
+	})
+	const seek: Record<Phase, number> = { work: 0, break: 0 }
+
+	if (target >= 0 && target < duration) {
+		seek[timer.phase] = deltaMs / 1000
+		return { timer: at(timer.phase, duration - target), seek }
+	}
+
+	const next = otherPhase(timer.phase)
+	const nextDuration = msFor(settings, next)
+	if (target >= duration) {
+		const over = Math.min(target - duration, nextDuration)
+		seek[timer.phase] = (duration - elapsed) / 1000
+		seek[next] = over / 1000
+		return { timer: at(next, nextDuration - over), seek }
+	}
+	const under = Math.min(-target, nextDuration)
+	seek[timer.phase] = -elapsed / 1000
+	seek[next] = -under / 1000
+	return { timer: at(next, under), seek }
+}
+
 export function formatClock(seconds: number) {
 	const total = Math.max(0, seconds)
 	const m = Math.floor(total / 60)
@@ -443,6 +496,7 @@ export type YTPlayer = {
 	pauseVideo(): void
 	loadVideoById(request: VideoRequest): void
 	cueVideoById(request: VideoRequest): void
+	seekTo(seconds: number, allowSeekAhead: boolean): void
 	getCurrentTime(): number
 	getPlayerState(): number
 	destroy(): void

@@ -20,6 +20,7 @@ import {
 	resolveDay,
 	restoreTimer,
 	resumablePomo,
+	scrubTimer,
 	resumeWindowMs,
 	straddlesRollover,
 	toLocalInput,
@@ -394,5 +395,59 @@ describe('isThrowaway', () => {
 	})
 	it('keeps one that has been reviewed, however short it ran', () => {
 		expect(isThrowaway(pomoAt(now - 20_000, null, { confirmed: true }), now)).toBe(false)
+	})
+})
+
+describe('scrubTimer', () => {
+	const now = 1_000_000
+	// the defaults: 25 minutes of work, 5 of break
+	const settings = DEFAULT_SETTINGS
+	const workMs = msFor(settings, 'work')
+	const breakMs = msFor(settings, 'break')
+	const at = (phase: 'work' | 'break', elapsedMs: number, running = true): Timer => ({
+		phase,
+		remainingMs: msFor(settings, phase) - elapsedMs,
+		endsAt: running ? now + msFor(settings, phase) - elapsedMs : null,
+	})
+
+	it('moves the clock and the video of the phase it stays in', () => {
+		const { timer, seek } = scrubTimer(at('work', 220_000), settings, 60_000, now)
+		expect(timer.phase).toBe('work')
+		expect(timer.remainingMs).toBe(workMs - 280_000)
+		expect(seek).toEqual({ work: 60, break: 0 })
+	})
+
+	it('takes a minute back off the clock and the video together', () => {
+		const { timer, seek } = scrubTimer(at('work', 220_000), settings, -60_000, now)
+		expect(timer.remainingMs).toBe(workMs - 160_000)
+		expect(seek).toEqual({ work: -60, break: 0 })
+	})
+
+	it('carries the rest of a nudge over the end of the pomo into the break', () => {
+		// 20 seconds of work left, so the minute lands 40 seconds into the break
+		const { timer, seek } = scrubTimer(at('work', workMs - 20_000), settings, 60_000, now)
+		expect(timer.phase).toBe('break')
+		expect(timer.remainingMs).toBe(breakMs - 40_000)
+		expect(seek).toEqual({ work: 20, break: 40 })
+	})
+
+	it('rewinds the break to its start and the rest into the end of the pomo', () => {
+		const { timer, seek } = scrubTimer(at('break', 44_000), settings, -60_000, now)
+		expect(timer.phase).toBe('work')
+		expect(timer.remainingMs).toBe(16_000)
+		expect(seek).toEqual({ work: -16, break: -44 })
+	})
+
+	it('keeps a paused timer paused and a running one running', () => {
+		expect(scrubTimer(at('work', 220_000, false), settings, 60_000, now).timer.endsAt).toBe(null)
+		const running = scrubTimer(at('work', 220_000), settings, 60_000, now).timer
+		expect(running.endsAt).toBe(now + running.remainingMs)
+	})
+
+	it('lands on the top of the phase rather than rolling past it', () => {
+		const { timer, seek } = scrubTimer(at('break', 60_000), settings, -60_000, now)
+		expect(timer.phase).toBe('break')
+		expect(timer.remainingMs).toBe(breakMs)
+		expect(seek).toEqual({ work: 0, break: -60 })
 	})
 })

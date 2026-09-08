@@ -28,6 +28,12 @@
 		pomo-hue 3s linear infinite;
 }
 
+/* the break wobble scales the clock past its own box, over the nudge buttons
+   beside it, and a transformed element is hit-tested where it is drawn */
+.pomo-clock {
+	pointer-events: none;
+}
+
 .pomo.is-break .pomo-clock {
 	animation: pomo-wobble 0.6s ease-in-out infinite alternate;
 	text-shadow:
