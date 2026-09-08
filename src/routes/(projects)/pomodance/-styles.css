@@ -34,6 +34,26 @@
 	pointer-events: none;
 }
 
+.pomo-controls {
+	position: sticky;
+	top: 0;
+	z-index: 10;
+}
+
+/* The page background is fixed, so only the page's own content passes under the
+   bar and the blur is what keeps the clock readable over it. The veil is a
+   pseudo-element rather than the bar's own background so the mask can fade the
+   blur out at the bottom edge without fading the clock with it. */
+.pomo-controls::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background: rgb(0 0 0 / 0.12);
+	backdrop-filter: blur(14px);
+	mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent);
+}
+
 .pomo.is-break .pomo-clock {
 	animation: pomo-wobble 0.6s ease-in-out infinite alternate;
 	text-shadow:
