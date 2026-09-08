@@ -260,6 +260,44 @@ export function straddlesRollover(currentDay: string | null, pomos: Pomo[], now:
 	return !!last && now - Date.parse(last.end ?? last.start) < LATE_NIGHT_GAP_MS
 }
 
+/**
+ * The day a visit files its pomos under. A saved day that is no longer today's
+ * only survives while the late-night session that made it is still going; every
+ * other visit starts on a fresh day.
+ */
+export function resolveDay(stored: string | null, pomos: Pomo[], now: number): string {
+	return stored && straddlesRollover(stored, pomos, now) ? stored : workDayOf(new Date(now))
+}
+
+/** The days behind the one being worked on, newest first, for the history. */
+export function pastDays(pomos: Pomo[], day: string): { day: string; pomos: Pomo[] }[] {
+	const days = new Map<string, Pomo[]>()
+	for (const pomo of pomos) {
+		if (pomo.day === day) continue
+		days.set(pomo.day, [...(days.get(pomo.day) ?? []), pomo])
+	}
+	return [...days.entries()]
+		.sort(([a], [b]) => b.localeCompare(a))
+		.map(([key, filed]) => ({ day: key, pomos: [...filed].sort(byStart) }))
+}
+
+/** What a day came to: how many pomos, and how long the finished ones ran. */
+export function dayTotals(pomos: Pomo[]) {
+	const ms = pomos.reduce(
+		(total, p) => total + (p.end ? Date.parse(p.end) - Date.parse(p.start) : 0),
+		0
+	)
+	return { count: pomos.length, minutes: Math.round(ms / 60_000) }
+}
+
+/** Minutes as a spoken duration: `45m`, `1h`, `2h 05m`. */
+export function formatDuration(minutes: number) {
+	const hours = Math.floor(minutes / 60)
+	const rest = minutes % 60
+	if (!hours) return `${rest}m`
+	return rest ? `${hours}h ${String(rest).padStart(2, '0')}m` : `${hours}h`
+}
+
 /** Accepts a bare video id or any of the usual youtube URL shapes. */
 export function parseVideoId(input: string): string {
 	const s = input.trim()

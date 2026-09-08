@@ -108,3 +108,24 @@ visitor:
 - notSee review-dialog
 - see ledger-entry #1
 - seeText already written up
+
+# keeper can look back at an earlier day and close the view again
+
+keeper:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText a pomo from an earlier sitting
+- click history-button
+- seeText Past days
+- notSee ledger-entry
+- see history-day #1
+- click history-day #1
+- see ledger-entry #2
+- seeText something from a day gone by
+- click history-back
+- seeText Past days
+- click history-close
+- seeText a pomo from an earlier sitting
+- notSee history-day

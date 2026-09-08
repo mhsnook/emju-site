@@ -4,16 +4,20 @@ import {
 	byStart,
 	closeAbandoned,
 	DEFAULT_SETTINGS,
+	dayTotals,
 	draftError,
 	draftOf,
 	isThrowaway,
 	formatClock,
+	formatDuration,
 	isFresh,
 	msFor,
 	normalizeSettings,
 	parseVideoId,
+	pastDays,
 	pomoFromDraft,
 	remainingOf,
+	resolveDay,
 	restoreTimer,
 	resumablePomo,
 	resumeWindowMs,
@@ -69,6 +73,75 @@ describe('straddlesRollover', () => {
 		expect(straddlesRollover('2026-09-07', stale, fiveAm.getTime())).toBe(false)
 		expect(straddlesRollover('2026-09-08', [], fiveAm.getTime())).toBe(false)
 		expect(straddlesRollover(null, [], fiveAm.getTime())).toBe(false)
+	})
+})
+
+describe('resolveDay', () => {
+	const pomo = (day: string, end: Date): Pomo => ({
+		id: '1',
+		day,
+		start: new Date(end.getTime() - 25 * 60_000).toISOString(),
+		end: end.toISOString(),
+		intention: '',
+		note: '',
+		confirmed: false,
+	})
+	const fiveAm = new Date(2026, 8, 8, 5, 0).getTime()
+
+	it('starts a new day when the saved one is behind', () => {
+		const yesterday = [pomo('2026-09-07', new Date(2026, 8, 7, 22, 0))]
+		expect(resolveDay('2026-09-07', yesterday, fiveAm)).toBe('2026-09-08')
+		expect(resolveDay(null, [], fiveAm)).toBe('2026-09-08')
+	})
+	it('keeps the saved day while a late-night session is still going', () => {
+		const stillUp = [pomo('2026-09-07', new Date(2026, 8, 8, 3, 30))]
+		expect(resolveDay('2026-09-07', stillUp, fiveAm)).toBe('2026-09-07')
+	})
+})
+
+describe('pastDays and dayTotals', () => {
+	const pomo = (id: string, day: string, hour: number, minutes: number | null): Pomo => ({
+		id,
+		day,
+		start: new Date(`${day}T${String(hour).padStart(2, '0')}:00:00.000Z`).toISOString(),
+		end:
+			minutes === null
+				? null
+				: new Date(
+						Date.parse(`${day}T${String(hour).padStart(2, '0')}:00:00.000Z`) +
+							minutes * 60_000
+					).toISOString(),
+		intention: '',
+		note: '',
+		confirmed: false,
+	})
+
+	it('groups the other days newest first, each in start order', () => {
+		const pomos = [
+			pomo('a', '2026-09-06', 11, 25),
+			pomo('b', '2026-09-08', 9, 25),
+			pomo('c', '2026-09-07', 14, 25),
+			pomo('d', '2026-09-06', 9, 25),
+		]
+		expect(pastDays(pomos, '2026-09-08').map((d) => d.day)).toEqual(['2026-09-07', '2026-09-06'])
+		expect(pastDays(pomos, '2026-09-08')[1].pomos.map((p) => p.id)).toEqual(['d', 'a'])
+	})
+	it('leaves out the day being worked on, and every day when that is the only one', () => {
+		expect(pastDays([pomo('a', '2026-09-08', 9, 25)], '2026-09-08')).toEqual([])
+	})
+	it('counts every pomo but only totals the finished ones', () => {
+		const pomos = [pomo('a', '2026-09-06', 9, 25), pomo('b', '2026-09-06', 10, null)]
+		expect(dayTotals(pomos)).toEqual({ count: 2, minutes: 25 })
+		expect(dayTotals([])).toEqual({ count: 0, minutes: 0 })
+	})
+})
+
+describe('formatDuration', () => {
+	it('reads out hours only once there are some', () => {
+		expect(formatDuration(0)).toBe('0m')
+		expect(formatDuration(45)).toBe('45m')
+		expect(formatDuration(60)).toBe('1h')
+		expect(formatDuration(125)).toBe('2h 05m')
 	})
 })
 
