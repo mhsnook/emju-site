@@ -33,12 +33,19 @@ export const STORAGE_PREFIX = 'pomodance:'
 
 export const DEFAULT_SETTINGS: Settings = {
 	phases: {
-		work: { videos: ['jfKfPfyJRdk'], minutes: 25 },
-		break: { videos: ['FGBhQbmPwH8', 'dQw4w9WgXcQ'], minutes: 5 },
+		work: { videos: ['uNw_a7HFwvg', 'CFGLoQIhmow'], minutes: 25 },
+		break: { videos: ['zjiU2YAlYKY', 'NF-kLy44Hls'], minutes: 5 },
 	},
 	showLedger: true,
 	lessMotion: false,
 }
+
+/**
+ * Videos this project used to ship as defaults and that no longer play here.
+ * A saved playlist made of nothing but these was never chosen, so it gets
+ * today's default back; a playlist someone emptied on purpose stays empty.
+ */
+const RETIRED_VIDEOS = ['jfKfPfyJRdk', 'FGBhQbmPwH8', 'dQw4w9WgXcQ']
 
 /** Pomos shorter than this are discarded rather than filed. */
 export const MIN_POMO_MS = 60_000
@@ -80,13 +87,17 @@ export function normalizeSettings(stored: unknown): Settings {
 		const fallback = DEFAULT_SETTINGS.phases[p]
 		const saved = s.phases?.[p]
 		const minutes = saved?.minutes
+		const videos = saved?.videos
+			? saved.videos
+					.filter((v) => typeof v === 'string')
+					.map(parseVideoId)
+					.filter(Boolean)
+			: fallback.videos
 		return {
-			videos: saved?.videos
-				? saved.videos
-						.filter((v) => typeof v === 'string')
-						.map(parseVideoId)
-						.filter(Boolean)
-				: fallback.videos,
+			videos:
+				videos.length > 0 && videos.every((v) => RETIRED_VIDEOS.includes(v))
+					? fallback.videos
+					: videos,
 			minutes: typeof minutes === 'number' && minutes > 0 ? minutes : fallback.minutes,
 		}
 	}

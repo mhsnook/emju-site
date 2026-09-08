@@ -31,6 +31,20 @@ visitor:
 - click break-playlist-toggle
 - see break-playlist-input
 
+# visitor can start the timer by entering an intention
+
+visitor:
+
+- openTo /pomodance
+- see pomodance-page
+- wait 1000
+- seeText Intention for this pomo — enter to start
+- typeInto intention-input 'start me with the keyboard'
+- pressKey Enter
+- seeText Pause
+- see ledger-entry #1
+- seeText start me with the keyboard
+
 # a running pomo survives a reload
 
 visitor:

@@ -493,9 +493,14 @@ function PomodancePage() {
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label="Intention for this pomo"
+							label={
+								idle
+									? 'Intention for this pomo — enter to start'
+									: 'Intention for this pomo'
+							}
 							value={intention}
 							onChange={updateIntention}
+							onEnter={idle ? start : undefined}
 							placeholder="what are you going to do?"
 						/>
 					</section>
@@ -796,6 +801,7 @@ function SettingInput({
 	label,
 	value,
 	onChange,
+	onEnter,
 	type = 'text',
 	placeholder,
 	className,
@@ -804,6 +810,7 @@ function SettingInput({
 	label: string
 	value: string
 	onChange: (v: string) => void
+	onEnter?: () => void
 	type?: 'text' | 'number' | 'date' | 'datetime-local'
 	placeholder?: string
 	className?: string
@@ -819,6 +826,7 @@ function SettingInput({
 				value={value}
 				placeholder={placeholder}
 				onChange={(e) => onChange(e.target.value)}
+				onKeyDown={(e) => e.key === 'Enter' && onEnter?.()}
 				className="input w-full"
 			/>
 		</label>

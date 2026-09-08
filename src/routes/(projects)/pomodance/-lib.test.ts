@@ -177,17 +177,27 @@ describe('normalizeSettings', () => {
 	it('reduces playlist entries to ids and drops the unplayable ones', () => {
 		const s = normalizeSettings({
 			phases: {
-				work: { videos: ['https://www.youtube.com/watch?v=jfKfPfyJRdk', 'nope', 42] },
+				work: { videos: ['https://www.youtube.com/watch?v=CFGLoQIhmow', 'nope', 42] },
 				break: { videos: [] },
 			},
 		})
-		expect(s.phases.work.videos).toEqual(['jfKfPfyJRdk'])
+		expect(s.phases.work.videos).toEqual(['CFGLoQIhmow'])
 		expect(s.phases.break.videos).toEqual([])
 	})
 	it('keeps an emptied playlist empty rather than restoring the defaults', () => {
 		expect(normalizeSettings({ phases: { break: { videos: [] } } }).phases.break.videos).toEqual(
 			[]
 		)
+	})
+	it('hands back the default playlist when a save holds only retired videos', () => {
+		const s = normalizeSettings({
+			phases: {
+				work: { videos: ['jfKfPfyJRdk'] },
+				break: { videos: ['dQw4w9WgXcQ', 'zjiU2YAlYKY'] },
+			},
+		})
+		expect(s.phases.work.videos).toEqual(DEFAULT_SETTINGS.phases.work.videos)
+		expect(s.phases.break.videos).toEqual(['dQw4w9WgXcQ', 'zjiU2YAlYKY'])
 	})
 })
 
