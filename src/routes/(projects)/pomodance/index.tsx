@@ -68,18 +68,31 @@ export const Route = createFileRoute('/(projects)/pomodance/')({
 	ssr: false,
 	staticData: { bareLayout: true },
 	head: () => ({
-		meta: [{ title: `${TITLE} — EMJU` }, { name: 'description', content: DESCRIPTION }],
-		links: [{ rel: 'stylesheet', href: pomodanceCss }],
+		meta: [
+			{ title: PAGE_TITLE },
+			{ name: 'description', content: DESCRIPTION },
+			{ property: 'og:title', content: PAGE_TITLE },
+			{ property: 'og:description', content: DESCRIPTION },
+			{ property: 'og:type', content: 'website' },
+			{ property: 'og:url', content: PAGE_URL },
+			{ name: 'twitter:card', content: 'summary' },
+		],
+		links: [
+			{ rel: 'canonical', href: PAGE_URL },
+			{ rel: 'stylesheet', href: pomodanceCss },
+		],
 	}),
 	component: PomodancePage,
 })
 
 const TITLE = 'Pomodance'
+const PAGE_TITLE = 'Pomodance: a Pomodoro timer slash break-time dance-off'
+const PAGE_URL = `${company.site}/pomodance`
 const DESCRIPTION =
 	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
 
 const CREDITS = [
-	{ label: company.name, href: company.site },
+	{ label: new URL(company.site).hostname, href: company.site },
 	{ label: 'mhsnook', href: 'https://github.com/mhsnook' },
 	{ label: 'MIT license', href: `${company.repo}/blob/main/LICENSE` },
 	{ label: 'see the code', href: `${company.repo}/tree/main/src/routes/(projects)/pomodance` },
@@ -839,7 +852,7 @@ function PomodanceFooter() {
 			className="font-ui px-6 pb-6 text-center text-xs opacity-60"
 		>
 			<p>
-				<span>© {new Date().getFullYear()} </span>
+				<span>a silly project by </span>
 				{CREDITS.map((link, i) => (
 					<Fragment key={link.href}>
 						{i > 0 && <span aria-hidden> · </span>}
