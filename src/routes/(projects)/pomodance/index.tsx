@@ -10,10 +10,12 @@ import {
 	cn,
 	DEFAULT_SETTINGS,
 	dayLabel,
+	dayTotals,
 	draftError,
 	draftOf,
 	fetchVideoTitle,
 	formatClock,
+	formatDuration,
 	isFresh,
 	keepIfSame,
 	loadCursors,
@@ -26,10 +28,12 @@ import {
 	isThrowaway,
 	msFor,
 	parseVideoId,
+	pastDays,
 	pomoFromDraft,
 	readPomos,
 	readTimer,
 	remainingOf,
+	resolveDay,
 	resumablePomo,
 	saveCursors,
 	saveDay,
@@ -144,12 +148,13 @@ function PomodancePage() {
 		break: restored.break.seconds,
 	})
 	const [timer, dispatch] = useReducer(timerReducer, settings, loadTimer)
-	const [intention, setIntention] = useState(loadIntention)
 	// a restored work timer is a pomo still in progress, so it keeps its ledger entry open
 	const [pomos, setPomos] = useState(() =>
 		loadPomos(settings.phases.work.minutes, timer.phase === 'work' && !isFresh(timer, settings))
 	)
-	const [day, setDay] = useState(() => loadDay() ?? workDayOf(new Date()))
+	const [day, setDay] = useState(() => resolveDay(loadDay(), pomos, Date.now()))
+	// the saved intention belongs to the saved day; a new day starts blank
+	const [intention, setIntention] = useState(() => (day === loadDay() ? loadIntention() : ''))
 
 	const [review, setReview] = useState<Pomo | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
@@ -171,17 +176,20 @@ function PomodancePage() {
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
+	useEffect(() => saveIntention(intention), [intention])
 	useEffect(() => saveTimer(timer), [timer])
 
 	// This tab is not the only writer: another tab, or a hand edit in devtools,
 	// can move the same keys underneath it.
 	useEffect(() => {
 		const sync = () => {
-			const stored = loadSettings()
-			setSettings((prev) => keepIfSame(prev, stored))
-			setPomos((prev) => keepIfSame(prev, readPomos()))
-			setIntention(loadIntention())
-			setDay(loadDay() ?? workDayOf(new Date()))
+			setSettings((prev) => keepIfSame(prev, loadSettings()))
+			const stored = readPomos()
+			setPomos((prev) => keepIfSame(prev, stored))
+			const savedDay = loadDay()
+			const today = resolveDay(savedDay, stored, Date.now())
+			setDay(today)
+			setIntention(today === savedDay ? loadIntention() : '')
 			const t = readTimer()
 			if (t) dispatch({ type: 'restore', timer: t })
 		}
@@ -391,7 +399,6 @@ function PomodancePage() {
 
 	const updateIntention = (value: string) => {
 		setIntention(value)
-		saveIntention(value)
 		if (current) patchPomo(current.id, { intention: value })
 	}
 
@@ -486,9 +493,14 @@ function PomodancePage() {
 						<SettingInput
 							testId="intention-input"
 							className="w-full max-w-xl"
-							label="Intention for this pomo"
+							label={
+								idle
+									? 'Intention for this pomo — enter to start'
+									: 'Intention for this pomo'
+							}
 							value={intention}
 							onChange={updateIntention}
+							onEnter={idle ? start : undefined}
 							placeholder="what are you going to do?"
 						/>
 					</section>
@@ -789,6 +801,7 @@ function SettingInput({
 	label,
 	value,
 	onChange,
+	onEnter,
 	type = 'text',
 	placeholder,
 	className,
@@ -797,6 +810,7 @@ function SettingInput({
 	label: string
 	value: string
 	onChange: (v: string) => void
+	onEnter?: () => void
 	type?: 'text' | 'number' | 'date' | 'datetime-local'
 	placeholder?: string
 	className?: string
@@ -812,6 +826,7 @@ function SettingInput({
 				value={value}
 				placeholder={placeholder}
 				onChange={(e) => onChange(e.target.value)}
+				onKeyDown={(e) => e.key === 'Enter' && onEnter?.()}
 				className="input w-full"
 			/>
 		</label>
@@ -1307,31 +1322,148 @@ const Ledger = memo(function Ledger({
 	day: string
 	onEdit: (pomo: Pomo) => void
 }) {
+	const [browsing, setBrowsing] = useState(false)
+	const [openDay, setOpenDay] = useState<string | null>(null)
 	const today = pomos.filter((p) => p.day === day)
-	const earlier = pomos.filter((p) => p.day !== day)
-	const earlierDays = [...new Set(earlier.map((p) => p.day))].sort().reverse()
+	const past = pastDays(pomos, day)
+	// the day being read can lose its last pomo to an edit while it is open
+	const viewing = openDay && {
+		day: openDay,
+		pomos: past.find((d) => d.day === openDay)?.pomos ?? [],
+	}
+
+	const close = () => {
+		setOpenDay(null)
+		setBrowsing(false)
+	}
+
 	return (
 		<aside
 			data-testid="ledger"
 			className="flex flex-col gap-3 text-sm lg:border-l lg:border-current/20 lg:pl-6"
 		>
-			<h2 className="font-display text-xl">{dayLabel(day)}</h2>
-			{today.length === 0 && <p className="opacity-60">No pomos yet today.</p>}
-			<PomoList pomos={today} onEdit={onEdit} />
-			{earlierDays.length > 0 && (
-				<details className="opacity-70 open:opacity-100">
-					<summary className="cursor-pointer">Earlier days</summary>
-					{earlierDays.map((d) => (
-						<div key={d} className="mt-3">
-							<h3 className="font-bold">{dayLabel(d)}</h3>
-							<PomoList pomos={earlier.filter((p) => p.day === d)} onEdit={onEdit} />
-						</div>
-					))}
-				</details>
+			{!browsing && (
+				<>
+					<LedgerHeading
+						title={dayLabel(day)}
+						pomos={today}
+						action={
+							<button
+								type="button"
+								id="pomo-history"
+								data-testid="history-button"
+								aria-label="Past days"
+								title="Past days"
+								onClick={() => setBrowsing(true)}
+								className="btn btn-ghost btn-sm shrink-0"
+							>
+								🕘 History
+							</button>
+						}
+					/>
+					{today.length === 0 && <p className="opacity-60">No pomos yet today.</p>}
+					<PomoList pomos={today} onEdit={onEdit} />
+				</>
+			)}
+
+			{browsing && !viewing && (
+				<>
+					<LedgerHeading title="Past days" action={<CloseHistory onClick={close} />} />
+					{past.length === 0 && <p className="opacity-60">No earlier days yet.</p>}
+					<ol className="flex flex-col gap-2">
+						{past.map((entry) => (
+							<li key={entry.day}>
+								<button
+									type="button"
+									id={`history-day-${entry.day}`}
+									data-testid="history-day"
+									onClick={() => setOpenDay(entry.day)}
+									className="font-ui flex w-full flex-col items-start gap-0.5 rounded-lg bg-white/10 px-3 py-2 text-left hover:bg-white/20"
+								>
+									<span>{dayLabel(entry.day)}</span>
+									<span className="text-xs opacity-70">{summarize(entry.pomos)}</span>
+								</button>
+							</li>
+						))}
+					</ol>
+				</>
+			)}
+
+			{browsing && viewing && (
+				<>
+					<LedgerHeading
+						title={dayLabel(viewing.day)}
+						pomos={viewing.pomos}
+						back={
+							<button
+								type="button"
+								id="history-back"
+								data-testid="history-back"
+								aria-label="Back to the list of past days"
+								title="All past days"
+								onClick={() => setOpenDay(null)}
+								className="btn btn-circle btn-ghost btn-sm shrink-0"
+							>
+								‹
+							</button>
+						}
+						action={<CloseHistory onClick={close} />}
+					/>
+					{viewing.pomos.length === 0 && (
+						<p className="opacity-60">Nothing left on this day.</p>
+					)}
+					<PomoList pomos={viewing.pomos} onEdit={onEdit} />
+				</>
 			)}
 		</aside>
 	)
 })
+
+const summarize = (pomos: Pomo[]) => {
+	const { count, minutes } = dayTotals(pomos)
+	return `${count} ${count === 1 ? 'pomo' : 'pomos'} · ${formatDuration(minutes)}`
+}
+
+function LedgerHeading({
+	title,
+	pomos,
+	back,
+	action,
+}: {
+	title: string
+	pomos?: Pomo[]
+	back?: ReactNode
+	action: ReactNode
+}) {
+	return (
+		<div className="flex items-start justify-between gap-2">
+			{back}
+			<div className="mr-auto flex min-w-0 flex-col">
+				<h2 className="font-display text-xl">{title}</h2>
+				{pomos && pomos.length > 0 && (
+					<span className="font-ui text-xs opacity-70">{summarize(pomos)}</span>
+				)}
+			</div>
+			{action}
+		</div>
+	)
+}
+
+function CloseHistory({ onClick }: { onClick: () => void }) {
+	return (
+		<button
+			type="button"
+			id="history-close"
+			data-testid="history-close"
+			aria-label="Close the history and go back to today"
+			title="Back to today"
+			onClick={onClick}
+			className="btn btn-circle btn-ghost btn-sm shrink-0"
+		>
+			✕
+		</button>
+	)
+}
 
 function PomoList({ pomos, onEdit }: { pomos: Pomo[]; onEdit: (pomo: Pomo) => void }) {
 	return (
