@@ -97,6 +97,8 @@ const PAGE_TITLE = 'Pomodance: a Pomodoro timer slash break-time dance-off'
 const PAGE_URL = `${company.site}/pomodance`
 // og:image is fetched by a crawler with no page context, so it has to be absolute
 const OG_IMAGE = `${company.site}/pomodance-og.png`
+const WORK_ICON = '/pomodance-icon.png'
+const BREAK_ICON = '/pomodance-icon-break.png'
 const DESCRIPTION =
 	'A pomodoro timer where the soundtrack changes when you go on break. Work and chill, then get up and dance.'
 
@@ -202,6 +204,19 @@ function PomodancePage() {
 	// enter puts you back to work: it starts a fresh session either way, and picks
 	// a paused pomo back up, but it will not start a break you stopped on purpose
 	const enterStarts = !running && (idle || phase === 'work')
+
+	// the tab icon follows the phase. It is the root route's link element being
+	// moved, not one of this page's own, so leaving the page has to put it back.
+	useEffect(() => {
+		const link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+		if (!link) return
+		const previous = { href: link.href, type: link.type }
+		link.type = 'image/png'
+		link.href = isBreak ? BREAK_ICON : WORK_ICON
+		return () => {
+			Object.assign(link, previous)
+		}
+	}, [isBreak])
 
 	useEffect(() => savePomos(pomos), [pomos])
 	useEffect(() => saveDay(day), [day])
