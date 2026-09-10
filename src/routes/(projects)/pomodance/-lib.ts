@@ -16,6 +16,10 @@ export type Pomo = {
 	day: string
 	start: string
 	end: string | null
+	/** time the clock stood still for, not counted as work */
+	pausedMs: number
+	/** when the pause still going began, if it is paused */
+	pausedAt: string | null
 	intention: string
 	note: string
 	confirmed: boolean
@@ -109,7 +113,9 @@ export function loadCursors(): Cursors {
 }
 export const saveCursors = (cursors: Cursors) => write(CURSORS_KEY, cursors)
 
-export const readPomos = () => read<Pomo[]>(POMOS_KEY, [])
+// pomos filed before pauses were recorded have none
+export const readPomos = (): Pomo[] =>
+	read<Partial<Pomo>[]>(POMOS_KEY, []).map((p) => ({ pausedMs: 0, pausedAt: null, ...p }) as Pomo)
 export const savePomos = (pomos: Pomo[]) => write(POMOS_KEY, pomos)
 
 /**
@@ -125,16 +131,12 @@ export function closeAbandoned(
 ): Pomo[] {
 	const open = pomos.filter((p) => p.end === null)
 	const carried = keepLastOpen ? open.at(-1) : undefined
-	return pomos.map((p) =>
-		p.end === null && p !== carried
-			? {
-					...p,
-					end: new Date(
-						Math.min(now, Date.parse(p.start) + workMinutes * 60_000)
-					).toISOString(),
-				}
-			: p
-	)
+	return pomos.map((p) => {
+		if (p.end !== null || p === carried) return p
+		const full = Date.parse(p.start) + p.pausedMs + workMinutes * 60_000
+		const end = p.pausedAt ? Math.min(Date.parse(p.pausedAt), full) : Math.min(now, full)
+		return { ...p, end: new Date(end).toISOString(), pausedAt: null }
+	})
 }
 
 export const loadPomos = (workMinutes: number, keepLastOpen: boolean) =>
@@ -161,8 +163,7 @@ export function resumablePomo(
 	if (!last) return null
 	const ended = Date.parse(last.end!)
 	if (now - ended > resumeWindowMs(settings)) return null
-	const workMs = msFor(settings, 'work')
-	return ended - Date.parse(last.start) < workMs - INTERRUPTED_SLACK_MS ? last : null
+	return workedMs(last, now) < msFor(settings, 'work') - INTERRUPTED_SLACK_MS ? last : null
 }
 
 /** The fields of a pomo as its edit form holds them, all as plain input strings. */
@@ -227,11 +228,20 @@ export const byStart = (a: Pomo, b: Pomo) => Date.parse(a.start) - Date.parse(b.
  * this one counts however long it ran.
  */
 export const isThrowaway = (pomo: Pomo, now: number) =>
-	!pomo.confirmed && now - Date.parse(pomo.start) < MIN_POMO_MS
+	!pomo.confirmed && workedMs(pomo, now) < MIN_POMO_MS
+
+/** How long the clock has actually run on a pomo: its span less the pauses, up to
+ * its end or, while it is still going, now. */
+export function workedMs(pomo: Pomo, now: number) {
+	const until = pomo.end ? Date.parse(pomo.end) : now
+	const pausing = pomo.pausedAt ? until - Date.parse(pomo.pausedAt) : 0
+	return Math.max(0, until - Date.parse(pomo.start) - pomo.pausedMs - pausing)
+}
+export const minutesOf = (pomo: Pomo) => Math.round(workedMs(pomo, Date.parse(pomo.end!)) / 60_000)
 
 /** What is left on the clock of an interrupted pomo, never less than a filable one. */
 export const remainingOf = (pomo: Pomo, workMs: number) =>
-	Math.max(MIN_POMO_MS, workMs - (Date.parse(pomo.end ?? pomo.start) - Date.parse(pomo.start)))
+	Math.max(MIN_POMO_MS, workMs - workedMs(pomo, Date.parse(pomo.end ?? pomo.start)))
 
 export const loadIntention = () => read<string>(INTENTION_KEY, '')
 export const saveIntention = (v: string) => write(INTENTION_KEY, v)
@@ -289,10 +299,7 @@ export function pastDays(pomos: Pomo[], day: string): { day: string; pomos: Pomo
 
 /** What a day came to: how many pomos, and how long the finished ones ran. */
 export function dayTotals(pomos: Pomo[]) {
-	const ms = pomos.reduce(
-		(total, p) => total + (p.end ? Date.parse(p.end) - Date.parse(p.start) : 0),
-		0
-	)
+	const ms = pomos.reduce((total, p) => total + (p.end ? workedMs(p, 0) : 0), 0)
 	return { count: pomos.length, minutes: Math.round(ms / 60_000) }
 }
 
@@ -642,11 +649,12 @@ export type Ledger = {
 }
 
 export type LedgerAction =
-	/** a pomo begins; nothing happens if one is already going */
-	| { type: 'open'; id: string; now: number; day: string; intention: string }
+	/** a pomo begins, or the one in progress comes off pause */
+	| { type: 'start'; id: string; now: number; day: string; intention: string }
+	| { type: 'pause-current'; now: number }
 	/** the pomo in progress ends: filed and put up for review, or dropped if it barely began */
 	| { type: 'close-current'; now: number; ranOut: boolean }
-	/** the pomo in progress starts over from now */
+	/** the pomo in progress starts over from now, pauses and all */
 	| { type: 'reset-current'; now: number }
 	/** a filed pomo goes back in progress, and any review of it is withdrawn */
 	| { type: 'reopen'; id: string }
@@ -667,9 +675,15 @@ export function ledgerReducer(s: Ledger, a: LedgerAction): Ledger {
 	const current = currentPomo(s.pomos)
 	const patch = (id: string, fields: Partial<Pomo>) =>
 		s.pomos.map((p) => (p.id === id ? { ...p, ...fields } : p))
+	// the pause still going, folded into the time paused as of now
+	const unpaused = (p: Pomo, now: number): Partial<Pomo> =>
+		p.pausedAt ? { pausedMs: p.pausedMs + now - Date.parse(p.pausedAt), pausedAt: null } : {}
 	switch (a.type) {
-		case 'open':
-			if (current) return s
+		case 'start':
+			if (current)
+				return current.pausedAt
+					? { ...s, pomos: patch(current.id, unpaused(current, a.now)) }
+					: s
 			return {
 				...s,
 				pomos: [
@@ -679,23 +693,38 @@ export function ledgerReducer(s: Ledger, a: LedgerAction): Ledger {
 						day: a.day,
 						start: new Date(a.now).toISOString(),
 						end: null,
+						pausedMs: 0,
+						pausedAt: null,
 						intention: a.intention,
 						note: '',
 						confirmed: false,
 					},
 				],
 			}
+		case 'pause-current':
+			if (!current || current.pausedAt) return s
+			return { ...s, pomos: patch(current.id, { pausedAt: new Date(a.now).toISOString() }) }
 		case 'close-current':
 			if (!current) return s
 			if (isThrowaway(current, a.now))
 				return { ...s, pomos: s.pomos.filter((p) => p.id !== current.id) }
 			return {
-				pomos: patch(current.id, { end: new Date(a.now).toISOString() }),
+				pomos: patch(current.id, {
+					...unpaused(current, a.now),
+					end: new Date(a.now).toISOString(),
+				}),
 				review: { id: current.id, ranOut: a.ranOut },
 			}
 		case 'reset-current':
 			if (!current) return s
-			return { ...s, pomos: patch(current.id, { start: new Date(a.now).toISOString() }) }
+			return {
+				...s,
+				pomos: patch(current.id, {
+					start: new Date(a.now).toISOString(),
+					pausedMs: 0,
+					pausedAt: current.pausedAt && new Date(a.now).toISOString(),
+				}),
+			}
 		case 'reopen':
 			return {
 				pomos: patch(a.id, { end: null }),

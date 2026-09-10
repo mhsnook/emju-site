@@ -9,6 +9,7 @@ import {
 	draftOf,
 	isThrowaway,
 	ledgerReducer,
+	minutesOf,
 	formatClock,
 	formatDuration,
 	isFresh,
@@ -64,6 +65,8 @@ describe('straddlesRollover', () => {
 		day,
 		start: new Date(end.getTime() - 25 * 60_000).toISOString(),
 		end: end.toISOString(),
+		pausedMs: 0,
+		pausedAt: null,
 		intention: '',
 		note: '',
 		confirmed: false,
@@ -88,6 +91,8 @@ describe('resolveDay', () => {
 		day,
 		start: new Date(end.getTime() - 25 * 60_000).toISOString(),
 		end: end.toISOString(),
+		pausedMs: 0,
+		pausedAt: null,
 		intention: '',
 		note: '',
 		confirmed: false,
@@ -117,6 +122,8 @@ describe('pastDays and dayTotals', () => {
 						Date.parse(`${day}T${String(hour).padStart(2, '0')}:00:00.000Z`) +
 							minutes * 60_000
 					).toISOString(),
+		pausedMs: 0,
+		pausedAt: null,
 		intention: '',
 		note: '',
 		confirmed: false,
@@ -204,6 +211,8 @@ const pomoAt = (start: number, lengthMs: number | null, extra: Partial<Pomo> = {
 	day: workDayOf(new Date(start)),
 	start: new Date(start).toISOString(),
 	end: lengthMs === null ? null : new Date(start + lengthMs).toISOString(),
+	pausedMs: 0,
+	pausedAt: null,
 	intention: 'ship the thing',
 	note: '',
 	confirmed: false,
@@ -394,6 +403,13 @@ describe('editing a filed pomo', () => {
 describe('isThrowaway', () => {
 	const now = Date.now()
 
+	it('counts worked time, not time spent paused', () => {
+		const parked = pomoAt(now - 10 * 60_000, null, {
+			pausedAt: new Date(now - 9.5 * 60_000).toISOString(),
+		})
+		expect(isThrowaway(parked, now)).toBe(true)
+	})
+
 	it('drops a pomo that barely ran', () => {
 		expect(isThrowaway(pomoAt(now - 20_000, null), now)).toBe(true)
 		expect(isThrowaway(pomoAt(now - 5 * 60_000, null), now)).toBe(false)
@@ -509,12 +525,43 @@ describe('ledgerReducer', () => {
 	const now = Date.parse('2026-09-07T12:51:00Z')
 	const day = '2026-09-07'
 	const empty: Ledger = { pomos: [], review: null }
-	const opened = ledgerReducer(empty, { type: 'open', id: 'a', now, day, intention: 'write' })
+	const opened = ledgerReducer(empty, { type: 'start', id: 'a', now, day, intention: 'write' })
 
-	it('open starts one pomo and only one', () => {
+	it('start opens one pomo and only one', () => {
 		expect(opened.pomos).toHaveLength(1)
 		expect(opened.pomos[0]).toMatchObject({ id: 'a', day, end: null, intention: 'write' })
-		expect(ledgerReducer(opened, { type: 'open', id: 'b', now, day, intention: '' })).toBe(opened)
+		expect(ledgerReducer(opened, { type: 'start', id: 'b', now, day, intention: '' })).toBe(
+			opened
+		)
+	})
+	it('a pause is not work: start ends it, close folds it in, reset forgets it', () => {
+		const m = 60_000
+		const paused = ledgerReducer(opened, { type: 'pause-current', now: now + 10 * m })
+		expect(paused.pomos[0].pausedAt).toBe(new Date(now + 10 * m).toISOString())
+		expect(ledgerReducer(paused, { type: 'pause-current', now: now + 11 * m })).toBe(paused)
+		const back = ledgerReducer(paused, {
+			type: 'start',
+			id: 'x',
+			now: now + 15 * m,
+			day,
+			intention: '',
+		})
+		expect(back.pomos).toHaveLength(1)
+		expect(back.pomos[0]).toMatchObject({ pausedMs: 5 * m, pausedAt: null })
+		const done = ledgerReducer(back, { type: 'close-current', now: now + 35 * m, ranOut: true })
+		expect(minutesOf(done.pomos[0])).toBe(30)
+		const closedMidPause = ledgerReducer(paused, {
+			type: 'close-current',
+			now: now + 15 * m,
+			ranOut: false,
+		})
+		expect(closedMidPause.pomos[0]).toMatchObject({ pausedMs: 5 * m, pausedAt: null })
+		expect(minutesOf(closedMidPause.pomos[0])).toBe(10)
+		const reset = ledgerReducer(paused, { type: 'reset-current', now: now + 15 * m })
+		expect(reset.pomos[0]).toMatchObject({
+			pausedMs: 0,
+			pausedAt: new Date(now + 15 * m).toISOString(),
+		})
 	})
 	it('reset-current moves the start of the one in progress, and files nothing', () => {
 		const later = now + 5 * 60_000
@@ -577,7 +624,7 @@ describe('ledgerReducer', () => {
 	it('replace keeps the ledger sorted by start, remove takes one out', () => {
 		const two = ledgerReducer(
 			ledgerReducer(opened, { type: 'close-current', now: now + 5 * 60_000, ranOut: true }),
-			{ type: 'open', id: 'b', now: now + 10 * 60_000, day, intention: '' }
+			{ type: 'start', id: 'b', now: now + 10 * 60_000, day, intention: '' }
 		)
 		const moved = { ...two.pomos[1], start: new Date(now - 60_000).toISOString() }
 		expect(ledgerReducer(two, { type: 'replace', pomo: moved }).pomos.map((p) => p.id)).toEqual([

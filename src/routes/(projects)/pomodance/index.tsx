@@ -21,6 +21,7 @@ import {
 	keepIfSame,
 	lastUnreviewed,
 	ledgerReducer,
+	minutesOf,
 	loadCursors,
 	loadDay,
 	loadIntention,
@@ -120,8 +121,6 @@ const MINUTES_LABEL: Record<Phase, string> = {
 
 const timeFormat = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' })
 const fmtTime = (iso: string) => timeFormat.format(new Date(iso))
-const minutesBetween = (a: string, b: string) =>
-	Math.round((Date.parse(b) - Date.parse(a)) / 60_000)
 const weekday = (day: string) => dayLabel(day).split(',')[0]
 
 /** How far one press of the nudge or scrub controls moves the clock. */
@@ -233,7 +232,7 @@ function PomodancePage() {
 
 	const openPomo = (now: number) => {
 		if (!current && straddlesRollover(day, pomos, now)) setAskRollover(true)
-		ledger({ type: 'open', id: crypto.randomUUID(), now, day, intention })
+		ledger({ type: 'start', id: crypto.randomUUID(), now, day, intention })
 	}
 
 	const startTimer = (now: number) => {
@@ -262,8 +261,10 @@ function PomodancePage() {
 
 	const pause = () => {
 		if (!running) return
+		const now = Date.now()
 		sounds.click()
-		clock({ type: 'pause', now: Date.now() })
+		clock({ type: 'pause', now })
+		ledger({ type: 'pause-current', now })
 	}
 
 	/** Start over: the clock goes back to the top and the pomo in progress starts from now. */
@@ -731,8 +732,8 @@ function PomodancePage() {
 				<Modal testId="resume-dialog" onDismiss={() => setAskResume(null)}>
 					<h2 className="font-display text-2xl">Pick your last pomo back up?</h2>
 					<p>
-						You started it at {fmtTime(askResume.start)} and it stopped{' '}
-						{minutesBetween(askResume.start, askResume.end!)}m later, with{' '}
+						You started it at {fmtTime(askResume.start)} and it stopped {minutesOf(askResume)}
+						m later, with{' '}
 						{Math.ceil(remainingOf(askResume, msFor(settings, 'work')) / 60_000)}m still on
 						the clock.
 					</p>
@@ -1315,8 +1316,8 @@ function ReviewDialog({
 				className="flex flex-col gap-4"
 			>
 				<h2 className="font-display text-2xl">
-					{ranOut ? 'Pomo done' : 'Pomo stopped'}: {minutesBetween(pomo.start, pomo.end!)}m,
-					started {fmtTime(pomo.start)}
+					{ranOut ? 'Pomo done' : 'Pomo stopped'}: {minutesOf(pomo)}m, started{' '}
+					{fmtTime(pomo.start)}
 				</h2>
 				<p className="text-sm opacity-75">
 					{pomo.intention
@@ -1626,7 +1627,7 @@ function PomoList({ pomos, onEdit }: { pomos: Pomo[]; onEdit: (pomo: Pomo) => vo
 					<div className="font-ui flex justify-between gap-2 text-xs tabular-nums opacity-70">
 						<span>
 							{fmtTime(p.start)} – {p.end ? fmtTime(p.end) : 'now'}
-							{p.end && ` · ${minutesBetween(p.start, p.end)}m`}
+							{p.end && ` · ${minutesOf(p)}m`}
 						</span>
 						<span className="flex items-center gap-1">
 							<span
