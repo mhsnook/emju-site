@@ -7,8 +7,8 @@ import remarkGfm from 'remark-gfm'
 import { company } from '#/content/site'
 
 import {
-	byStart,
 	cn,
+	currentPomo,
 	DEFAULT_SETTINGS,
 	dayLabel,
 	dayTotals,
@@ -20,6 +20,7 @@ import {
 	isFresh,
 	keepIfSame,
 	lastUnreviewed,
+	ledgerReducer,
 	loadCursors,
 	loadDay,
 	loadIntention,
@@ -27,7 +28,6 @@ import {
 	loadSettings,
 	loadTimer,
 	loadYouTubeApi,
-	isThrowaway,
 	msFor,
 	otherPhase,
 	parseVideoId,
@@ -49,7 +49,7 @@ import {
 	sounds,
 	STORAGE_PREFIX,
 	straddlesRollover,
-	timerAt,
+	timerReducer,
 	trackAt,
 	trackPos,
 	workDayOf,
@@ -58,7 +58,6 @@ import {
 	type Pomo,
 	type PomoDraft,
 	type Settings,
-	type Timer,
 	type YTPlayer,
 } from './-lib'
 
@@ -119,25 +118,6 @@ const MINUTES_LABEL: Record<Phase, string> = {
 	break: 'Break minutes',
 }
 
-type TimerAction =
-	| { type: 'start'; now: number }
-	| { type: 'pause'; now: number }
-	| { type: 'set'; timer: Timer }
-	| { type: 'restore'; timer: Timer }
-
-function timerReducer(t: Timer, a: TimerAction): Timer {
-	switch (a.type) {
-		case 'start':
-			return t.endsAt ? t : { ...t, endsAt: a.now + t.remainingMs }
-		case 'pause':
-			return t.endsAt ? { ...t, endsAt: null, remainingMs: remainingIn(t, a.now) } : t
-		case 'set':
-			return a.timer
-		case 'restore':
-			return keepIfSame(t, a.timer)
-	}
-}
-
 const timeFormat = new Intl.DateTimeFormat([], { hour: '2-digit', minute: '2-digit' })
 const fmtTime = (iso: string) => timeFormat.format(new Date(iso))
 const minutesBetween = (a: string, b: string) =>
@@ -175,16 +155,16 @@ function PomodancePage() {
 		work: restored.work.seconds,
 		break: restored.break.seconds,
 	})
-	const [timer, dispatch] = useReducer(timerReducer, settings, loadTimer)
+	const [timer, clock] = useReducer(timerReducer, settings, loadTimer)
 	// a restored work timer is a pomo still in progress, so it keeps its ledger entry open
-	const [pomos, setPomos] = useState(() =>
-		loadPomos(settings.phases.work.minutes, timer.phase === 'work' && !isFresh(timer, settings))
-	)
+	const [{ pomos, review }, ledger] = useReducer(ledgerReducer, timer, (t) => ({
+		pomos: loadPomos(settings.phases.work.minutes, t.phase === 'work' && !isFresh(t, settings)),
+		review: null,
+	}))
 	const [day, setDay] = useState(() => resolveDay(loadDay(), pomos, Date.now()))
 	// the saved intention belongs to the saved day; a new day starts blank
 	const [intention, setIntention] = useState(() => (day === loadDay() ? loadIntention() : ''))
 
-	const [review, setReview] = useState<{ pomo: Pomo; ranOut: boolean } | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
 	const [askResume, setAskResume] = useState<Pomo | null>(null)
 	const [editing, setEditing] = useState<Pomo | null>(null)
@@ -200,7 +180,7 @@ function PomodancePage() {
 	const running = timer.endsAt !== null
 	const isBreak = phase === 'break'
 	const idle = isFresh(timer, settings)
-	const current = pomos.find((p) => p.end === null) ?? null
+	const current = currentPomo(pomos)
 	// enter puts you back to work: it starts a fresh session either way, and picks
 	// a paused pomo back up, but it will not start a break you stopped on purpose
 	const enterStarts = !running && (idle || phase === 'work')
@@ -229,13 +209,13 @@ function PomodancePage() {
 		const sync = () => {
 			setSettings((prev) => keepIfSame(prev, loadSettings()))
 			const stored = readPomos()
-			setPomos((prev) => keepIfSame(prev, stored))
+			ledger({ type: 'sync', pomos: stored })
 			const savedDay = loadDay()
 			const today = resolveDay(savedDay, stored, Date.now())
 			setDay(today)
 			setIntention(today === savedDay ? loadIntention() : '')
 			const t = readTimer()
-			if (t) dispatch({ type: 'restore', timer: t })
+			if (t) clock({ type: 'restore', timer: t })
 		}
 		const onStorage = (e: StorageEvent) => {
 			if (e.key === null || e.key.startsWith(STORAGE_PREFIX)) sync()
@@ -248,46 +228,17 @@ function PomodancePage() {
 		}
 	}, [])
 
-	const patchPomo = (id: string, patch: Partial<Pomo>) =>
-		setPomos((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)))
+	// Every control lands on one or two of the operations in -lib.ts: a clock
+	// action, a ledger action, or one of each when a press touches both.
 
 	const openPomo = (now: number) => {
-		if (current) return
-		if (straddlesRollover(day, pomos, now)) setAskRollover(true)
-		setPomos((ps) => [
-			...ps,
-			{
-				id: crypto.randomUUID(),
-				day,
-				start: new Date(now).toISOString(),
-				end: null,
-				intention,
-				note: '',
-				confirmed: false,
-			},
-		])
-	}
-
-	const closePomo = (now: number, ranOut: boolean) => {
-		if (!current) return
-		if (isThrowaway(current, now)) {
-			setPomos((ps) => ps.filter((p) => p.id !== current.id))
-			return
-		}
-		const closed = { ...current, end: new Date(now).toISOString() }
-		patchPomo(current.id, closed)
-		setReview({ pomo: closed, ranOut })
-	}
-
-	/** Puts a finished pomo back in progress, and drops the review that finished it. */
-	const reopenPomo = (pomo: Pomo) => {
-		patchPomo(pomo.id, { end: null })
-		setReview((r) => (r?.pomo.id === pomo.id ? null : r))
+		if (!current && straddlesRollover(day, pomos, now)) setAskRollover(true)
+		ledger({ type: 'open', id: crypto.randomUUID(), now, day, intention })
 	}
 
 	const startTimer = (now: number) => {
 		sounds.beep()
-		dispatch({ type: 'start', now })
+		clock({ type: 'start', now })
 		if (phase === 'work') openPomo(now)
 	}
 
@@ -303,37 +254,45 @@ function PomodancePage() {
 	const resumePomo = (pomo: Pomo) => {
 		const now = Date.now()
 		sounds.beep()
-		reopenPomo(pomo)
+		ledger({ type: 'reopen', id: pomo.id })
 		if (pomo.intention && !intention) updateIntention(pomo.intention)
-		const left = remainingOf(pomo, msFor(settings, 'work'))
-		dispatch({ type: 'set', timer: timerAt('work', left, true, now) })
+		clock({ type: 'resume', pomo, now, settings })
 		setAskResume(null)
 	}
+
 	const pause = () => {
 		if (!running) return
 		sounds.click()
-		dispatch({ type: 'pause', now: Date.now() })
+		clock({ type: 'pause', now: Date.now() })
 	}
-	const switchTo = (next: Phase, autostart: boolean, s = settings, ranOut = false) => {
+
+	/** Start over: the clock goes back to the top and the pomo in progress starts from now. */
+	const reset = () => {
 		const now = Date.now()
-		dispatch({ type: 'set', timer: timerAt(next, msFor(s, next), autostart, now) })
-		if (phase === 'work') closePomo(now, ranOut)
+		sounds.click()
+		clock({ type: 'reset', now, settings })
+		ledger({ type: 'reset-current', now })
+	}
+
+	const switchTo = (next: Phase, autostart: boolean, ranOut = false) => {
+		const now = Date.now()
+		clock({ type: 'switch', phase: next, autostart, now, settings })
+		if (phase === 'work') ledger({ type: 'close-current', now, ranOut })
 		if (next === 'work' && autostart) openPomo(now)
 	}
 
 	const finish = (autostart: boolean) => {
 		sounds.ring()
-		switchTo(otherPhase(phase), autostart, settings, true)
+		switchTo(otherPhase(phase), autostart, true)
 	}
 	const complete = () => finish(true)
 
 	/** Adds or takes a minute off this session alone; the soundtrack stays put. */
 	const stretch = (deltaMs: number) => {
 		const now = Date.now()
-		const remaining = remainingIn(timer, now) + deltaMs
-		if (remaining <= 0) return finish(running)
+		if (remainingIn(timer, now) + deltaMs <= 0) return finish(running)
 		sounds.click()
-		dispatch({ type: 'set', timer: timerAt(phase, remaining, running, now) })
+		clock({ type: 'stretch', deltaMs, now })
 	}
 
 	const persistCursors = (index: Record<Phase, number>) =>
@@ -384,15 +343,15 @@ function PomodancePage() {
 		if (next.phase === phase) sounds.click()
 		else {
 			sounds.ring()
-			if (next.phase === 'break') closePomo(now, true)
+			if (next.phase === 'break') ledger({ type: 'close-current', now, ranOut: true })
 			else {
 				// the break ended a pomo this is taking back; anything else starts a new one
 				const last = lastUnreviewed(pomos, day)
-				if (last) reopenPomo(last)
+				if (last) ledger({ type: 'reopen', id: last.id })
 				else openPomo(now)
 			}
 		}
-		dispatch({ type: 'set', timer: next })
+		clock({ type: 'scrub', deltaMs, now, settings })
 	}
 
 	useEffect(() => {
@@ -480,7 +439,7 @@ function PomodancePage() {
 		const next = { ...settings, ...patch }
 		setSettings(next)
 		saveSettings(next)
-		if (idle) switchTo(phase, false, next)
+		if (idle) clock({ type: 'reset', now: Date.now(), settings: next })
 	}
 
 	const updatePhase = (p: Phase, patch: Partial<PhaseSettings>) =>
@@ -490,14 +449,14 @@ function PomodancePage() {
 
 	const updateIntention = (value: string) => {
 		setIntention(value)
-		if (current) patchPomo(current.id, { intention: value })
+		ledger({ type: 'set-intention', value })
 	}
 
 	const finishReview = (note: string, confirmed: boolean, clearIntention: boolean) => {
-		if (review) patchPomo(review.pomo.id, { note, confirmed })
+		if (review) ledger({ type: 'review', id: review.id, note, confirmed })
 		if (clearIntention) updateIntention('')
-		setReview(null)
 	}
+	const reviewing = review && pomos.find((p) => p.id === review.id)
 
 	const today = workDayOf(new Date())
 
@@ -589,7 +548,7 @@ function PomodancePage() {
 								id="pomo-reset"
 								testId="reset-button"
 								label="Start over"
-								onClick={() => switchTo(phase, false)}
+								onClick={reset}
 								className="size-11"
 							>
 								<RotateCcw className="size-5" />
@@ -741,16 +700,12 @@ function PomodancePage() {
 				</Modal>
 			)}
 
-			{review && (
+			{reviewing && (
 				<ReviewDialog
-					pomo={review.pomo}
+					pomo={reviewing}
 					ranOut={review.ranOut}
 					onDismiss={() =>
-						finishReview(
-							review.pomo.note || review.pomo.intention,
-							review.pomo.confirmed,
-							false
-						)
+						finishReview(reviewing.note || reviewing.intention, reviewing.confirmed, false)
 					}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
 				/>
@@ -762,11 +717,11 @@ function PomodancePage() {
 					otherInProgress={current !== null && current.id !== editing.id}
 					onDismiss={() => setEditing(null)}
 					onSave={(edited) => {
-						setPomos((ps) => ps.map((p) => (p.id === edited.id ? edited : p)).sort(byStart))
+						ledger({ type: 'replace', pomo: edited })
 						setEditing(null)
 					}}
 					onDelete={() => {
-						setPomos((ps) => ps.filter((p) => p.id !== editing.id))
+						ledger({ type: 'remove', id: editing.id })
 						setEditing(null)
 					}}
 				/>
@@ -861,7 +816,7 @@ function PomodancePage() {
 							className="btn btn-primary"
 							onClick={() => {
 								setDay(today)
-								if (current) patchPomo(current.id, { day: today })
+								ledger({ type: 'move-current', day: today })
 								setAskRollover(false)
 							}}
 						>

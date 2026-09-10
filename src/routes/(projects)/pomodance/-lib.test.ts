@@ -8,6 +8,7 @@ import {
 	draftError,
 	draftOf,
 	isThrowaway,
+	ledgerReducer,
 	formatClock,
 	formatDuration,
 	isFresh,
@@ -22,12 +23,14 @@ import {
 	resumablePomo,
 	scrubTimer,
 	timerAt,
+	timerReducer,
 	resumeWindowMs,
 	straddlesRollover,
 	toLocalInput,
 	trackAt,
 	trackPos,
 	workDayOf,
+	type Ledger,
 	type Phase,
 	type Pomo,
 	type Settings,
@@ -447,5 +450,144 @@ describe('scrubTimer', () => {
 		expect(timer.phase).toBe('break')
 		expect(timer.remainingMs).toBe(BREAK_MS)
 		expect(seek).toEqual({ work: 0, break: -60 })
+	})
+})
+
+describe('timerReducer', () => {
+	const now = 1_000_000
+	const s = DEFAULT_SETTINGS
+	const work = msFor(s, 'work')
+	const midway = (): Timer => timerAt('work', work - 5 * 60_000, true, now)
+
+	it('starts and pauses where the clock sits', () => {
+		const paused: Timer = { phase: 'work', endsAt: null, remainingMs: 600_000 }
+		const started = timerReducer(paused, { type: 'start', now })
+		expect(started.endsAt).toBe(now + 600_000)
+		expect(timerReducer(started, { type: 'start', now })).toBe(started)
+		const again = timerReducer(started, { type: 'pause', now: now + 60_000 })
+		expect(again).toEqual({ phase: 'work', endsAt: null, remainingMs: 540_000 })
+		expect(timerReducer(again, { type: 'pause', now })).toBe(again)
+	})
+	it('reset goes back to the top of the same phase and keeps running', () => {
+		expect(timerReducer(midway(), { type: 'reset', now, settings: s })).toEqual(
+			timerAt('work', work, true, now)
+		)
+		const paused = timerReducer(midway(), { type: 'pause', now })
+		expect(timerReducer(paused, { type: 'reset', now, settings: s })).toEqual(
+			timerAt('work', work, false, now)
+		)
+	})
+	it('switch lands at the top of the phase asked for', () => {
+		const t = timerReducer(midway(), {
+			type: 'switch',
+			phase: 'break',
+			autostart: false,
+			now,
+			settings: s,
+		})
+		expect(t).toEqual({ phase: 'break', endsAt: null, remainingMs: msFor(s, 'break') })
+	})
+	it('stretch moves the end of this session and never below zero', () => {
+		expect(timerReducer(midway(), { type: 'stretch', deltaMs: 60_000, now }).endsAt).toBe(
+			midway().endsAt! + 60_000
+		)
+		expect(timerReducer(midway(), { type: 'stretch', deltaMs: -work, now }).endsAt).toBe(now)
+	})
+	it('scrub follows scrubTimer', () => {
+		expect(timerReducer(midway(), { type: 'scrub', deltaMs: 60_000, now, settings: s })).toEqual(
+			scrubTimer(midway(), s, 60_000, now).timer
+		)
+	})
+	it('resume counts down what the pomo had left', () => {
+		const pomo = pomoAt(now - 10 * 60_000, 5 * 60_000)
+		const t = timerReducer(midway(), { type: 'resume', pomo, now, settings: s })
+		expect(t).toEqual(timerAt('work', work - 5 * 60_000, true, now))
+	})
+})
+
+describe('ledgerReducer', () => {
+	const now = Date.parse('2026-09-07T12:51:00Z')
+	const day = '2026-09-07'
+	const empty: Ledger = { pomos: [], review: null }
+	const opened = ledgerReducer(empty, { type: 'open', id: 'a', now, day, intention: 'write' })
+
+	it('open starts one pomo and only one', () => {
+		expect(opened.pomos).toHaveLength(1)
+		expect(opened.pomos[0]).toMatchObject({ id: 'a', day, end: null, intention: 'write' })
+		expect(ledgerReducer(opened, { type: 'open', id: 'b', now, day, intention: '' })).toBe(opened)
+	})
+	it('reset-current moves the start of the one in progress, and files nothing', () => {
+		const later = now + 5 * 60_000
+		const reset = ledgerReducer(opened, { type: 'reset-current', now: later })
+		expect(reset.pomos).toHaveLength(1)
+		expect(reset.pomos[0].start).toBe(new Date(later).toISOString())
+		expect(reset.review).toBeNull()
+		expect(ledgerReducer(empty, { type: 'reset-current', now })).toBe(empty)
+	})
+	it('close-current files the pomo and puts it up for review, ran out or not', () => {
+		const later = now + 5 * 60_000
+		const stopped = ledgerReducer(opened, { type: 'close-current', now: later, ranOut: false })
+		expect(stopped.pomos[0].end).toBe(new Date(later).toISOString())
+		expect(stopped.review).toEqual({ id: 'a', ranOut: false })
+		const done = ledgerReducer(opened, { type: 'close-current', now: later, ranOut: true })
+		expect(done.review).toEqual({ id: 'a', ranOut: true })
+	})
+	it('close-current drops a pomo that barely began', () => {
+		const dropped = ledgerReducer(opened, {
+			type: 'close-current',
+			now: now + 20_000,
+			ranOut: false,
+		})
+		expect(dropped).toEqual(empty)
+	})
+	it('reopen withdraws the review of the pomo it puts back in progress', () => {
+		const stopped = ledgerReducer(opened, {
+			type: 'close-current',
+			now: now + 5 * 60_000,
+			ranOut: false,
+		})
+		const back = ledgerReducer(stopped, { type: 'reopen', id: 'a' })
+		expect(back.pomos[0].end).toBeNull()
+		expect(back.review).toBeNull()
+	})
+	it('review writes the pomo up and clears its review', () => {
+		const stopped = ledgerReducer(opened, {
+			type: 'close-current',
+			now: now + 5 * 60_000,
+			ranOut: false,
+		})
+		const written = ledgerReducer(stopped, {
+			type: 'review',
+			id: 'a',
+			note: 'did it',
+			confirmed: true,
+		})
+		expect(written.pomos[0]).toMatchObject({ note: 'did it', confirmed: true })
+		expect(written.review).toBeNull()
+	})
+	it('set-intention and move-current only touch the pomo in progress', () => {
+		expect(ledgerReducer(empty, { type: 'set-intention', value: 'x' })).toBe(empty)
+		expect(ledgerReducer(opened, { type: 'set-intention', value: 'x' }).pomos[0].intention).toBe(
+			'x'
+		)
+		expect(ledgerReducer(opened, { type: 'move-current', day: '2026-09-08' }).pomos[0].day).toBe(
+			'2026-09-08'
+		)
+	})
+	it('replace keeps the ledger sorted by start, remove takes one out', () => {
+		const two = ledgerReducer(
+			ledgerReducer(opened, { type: 'close-current', now: now + 5 * 60_000, ranOut: true }),
+			{ type: 'open', id: 'b', now: now + 10 * 60_000, day, intention: '' }
+		)
+		const moved = { ...two.pomos[1], start: new Date(now - 60_000).toISOString() }
+		expect(ledgerReducer(two, { type: 'replace', pomo: moved }).pomos.map((p) => p.id)).toEqual([
+			'b',
+			'a',
+		])
+		expect(ledgerReducer(two, { type: 'remove', id: 'a' }).pomos.map((p) => p.id)).toEqual(['b'])
+	})
+	it('sync keeps the same state when storage matches', () => {
+		expect(ledgerReducer(opened, { type: 'sync', pomos: [...opened.pomos] })).toBe(opened)
+		expect(ledgerReducer(opened, { type: 'sync', pomos: [] }).pomos).toEqual([])
 	})
 })

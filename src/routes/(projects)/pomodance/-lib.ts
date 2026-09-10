@@ -589,3 +589,139 @@ export const keepIfSame = <T>(prev: T, next: T) =>
 export function cn(...parts: Array<string | false | null | undefined>) {
 	return parts.filter(Boolean).join(' ')
 }
+
+// ---------------------------------------------------------------------------
+// The operations. Everything a button, a key, a video player or the clock
+// running out can do is one of these, split between the clock and the ledger:
+// a press that touches both (reset, switching phase) dispatches one of each.
+// ---------------------------------------------------------------------------
+
+export type TimerAction =
+	/** count down from wherever the clock sits */
+	| { type: 'start'; now: number }
+	| { type: 'pause'; now: number }
+	/** back to the top of this phase, still running if it was */
+	| { type: 'reset'; now: number; settings: Settings }
+	/** to the top of a phase, running or waiting there */
+	| { type: 'switch'; phase: Phase; autostart: boolean; now: number; settings: Settings }
+	/** a minute more or less on this session alone */
+	| { type: 'stretch'; deltaMs: number; now: number }
+	/** move the clock, carrying over into the neighbouring phase if it runs off the end */
+	| { type: 'scrub'; deltaMs: number; now: number; settings: Settings }
+	/** pick an interrupted pomo up with what it had left */
+	| { type: 'resume'; pomo: Pomo; now: number; settings: Settings }
+	/** another tab moved the clock */
+	| { type: 'restore'; timer: Timer }
+
+export function timerReducer(t: Timer, a: TimerAction): Timer {
+	const running = t.endsAt !== null
+	switch (a.type) {
+		case 'start':
+			return running ? t : { ...t, endsAt: a.now + t.remainingMs }
+		case 'pause':
+			return running ? { ...t, endsAt: null, remainingMs: remainingIn(t, a.now) } : t
+		case 'reset':
+			return timerAt(t.phase, msFor(a.settings, t.phase), running, a.now)
+		case 'switch':
+			return timerAt(a.phase, msFor(a.settings, a.phase), a.autostart, a.now)
+		case 'stretch':
+			return timerAt(t.phase, Math.max(0, remainingIn(t, a.now) + a.deltaMs), running, a.now)
+		case 'scrub':
+			return scrubTimer(t, a.settings, a.deltaMs, a.now).timer
+		case 'resume':
+			return timerAt('work', remainingOf(a.pomo, msFor(a.settings, 'work')), true, a.now)
+		case 'restore':
+			return keepIfSame(t, a.timer)
+	}
+}
+
+export type Ledger = {
+	pomos: Pomo[]
+	/** the pomo just closed and waiting to be written up, if any */
+	review: { id: string; ranOut: boolean } | null
+}
+
+export type LedgerAction =
+	/** a pomo begins; nothing happens if one is already going */
+	| { type: 'open'; id: string; now: number; day: string; intention: string }
+	/** the pomo in progress ends: filed and put up for review, or dropped if it barely began */
+	| { type: 'close-current'; now: number; ranOut: boolean }
+	/** the pomo in progress starts over from now */
+	| { type: 'reset-current'; now: number }
+	/** a filed pomo goes back in progress, and any review of it is withdrawn */
+	| { type: 'reopen'; id: string }
+	| { type: 'set-intention'; value: string }
+	/** the write-up of a finished pomo */
+	| { type: 'review'; id: string; note: string; confirmed: boolean }
+	/** a hand edit */
+	| { type: 'replace'; pomo: Pomo }
+	| { type: 'remove'; id: string }
+	/** the pomo in progress is filed under another day */
+	| { type: 'move-current'; day: string }
+	/** another tab wrote the ledger */
+	| { type: 'sync'; pomos: Pomo[] }
+
+export const currentPomo = (pomos: Pomo[]) => pomos.find((p) => p.end === null) ?? null
+
+export function ledgerReducer(s: Ledger, a: LedgerAction): Ledger {
+	const current = currentPomo(s.pomos)
+	const patch = (id: string, fields: Partial<Pomo>) =>
+		s.pomos.map((p) => (p.id === id ? { ...p, ...fields } : p))
+	switch (a.type) {
+		case 'open':
+			if (current) return s
+			return {
+				...s,
+				pomos: [
+					...s.pomos,
+					{
+						id: a.id,
+						day: a.day,
+						start: new Date(a.now).toISOString(),
+						end: null,
+						intention: a.intention,
+						note: '',
+						confirmed: false,
+					},
+				],
+			}
+		case 'close-current':
+			if (!current) return s
+			if (isThrowaway(current, a.now))
+				return { ...s, pomos: s.pomos.filter((p) => p.id !== current.id) }
+			return {
+				pomos: patch(current.id, { end: new Date(a.now).toISOString() }),
+				review: { id: current.id, ranOut: a.ranOut },
+			}
+		case 'reset-current':
+			if (!current) return s
+			return { ...s, pomos: patch(current.id, { start: new Date(a.now).toISOString() }) }
+		case 'reopen':
+			return {
+				pomos: patch(a.id, { end: null }),
+				review: s.review?.id === a.id ? null : s.review,
+			}
+		case 'set-intention':
+			if (!current) return s
+			return { ...s, pomos: patch(current.id, { intention: a.value }) }
+		case 'review':
+			return {
+				pomos: patch(a.id, { note: a.note, confirmed: a.confirmed }),
+				review: s.review?.id === a.id ? null : s.review,
+			}
+		case 'replace':
+			return {
+				...s,
+				pomos: s.pomos.map((p) => (p.id === a.pomo.id ? a.pomo : p)).sort(byStart),
+			}
+		case 'remove':
+			return { ...s, pomos: s.pomos.filter((p) => p.id !== a.id) }
+		case 'move-current':
+			if (!current) return s
+			return { ...s, pomos: patch(current.id, { day: a.day }) }
+		case 'sync': {
+			const pomos = keepIfSame(s.pomos, a.pomos)
+			return pomos === s.pomos ? s : { ...s, pomos }
+		}
+	}
+}

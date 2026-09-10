@@ -73,8 +73,10 @@ visitor:
 - see Pause
 - see ledger-entry #1
 - click reset-button
-- see Start
+- see Pause
 - seeText 25:00
+- see ledger-entry #1
+- notSee review-dialog
 
 # a minute forward at the end of a pomo rolls on into the break
 
