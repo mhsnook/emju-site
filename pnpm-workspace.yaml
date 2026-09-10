@@ -1,11 +1,11 @@
 allowBuilds:
-  core-js-pure: true
-  esbuild: true
-  sharp: true
-  workerd: true
+   core-js-pure: true
+   esbuild: true
+   sharp: true
+   workerd: true
 onlyBuiltDependencies:
-  - core-js-pure
-  - esbuild
-  - lightningcss
-  - sharp
-  - workerd
+   - core-js-pure
+   - esbuild
+   - lightningcss
+   - sharp
+   - workerd

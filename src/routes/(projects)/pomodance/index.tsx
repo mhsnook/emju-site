@@ -184,7 +184,7 @@ function PomodancePage() {
 	// the saved intention belongs to the saved day; a new day starts blank
 	const [intention, setIntention] = useState(() => (day === loadDay() ? loadIntention() : ''))
 
-	const [review, setReview] = useState<Pomo | null>(null)
+	const [review, setReview] = useState<{ pomo: Pomo; ranOut: boolean } | null>(null)
 	const [confirmSwitch, setConfirmSwitch] = useState<Phase | null>(null)
 	const [askResume, setAskResume] = useState<Pomo | null>(null)
 	const [editing, setEditing] = useState<Pomo | null>(null)
@@ -268,7 +268,7 @@ function PomodancePage() {
 		])
 	}
 
-	const closePomo = (now: number) => {
+	const closePomo = (now: number, ranOut: boolean) => {
 		if (!current) return
 		if (isThrowaway(current, now)) {
 			setPomos((ps) => ps.filter((p) => p.id !== current.id))
@@ -276,13 +276,13 @@ function PomodancePage() {
 		}
 		const closed = { ...current, end: new Date(now).toISOString() }
 		patchPomo(current.id, closed)
-		setReview(closed)
+		setReview({ pomo: closed, ranOut })
 	}
 
 	/** Puts a finished pomo back in progress, and drops the review that finished it. */
 	const reopenPomo = (pomo: Pomo) => {
 		patchPomo(pomo.id, { end: null })
-		setReview((r) => (r?.id === pomo.id ? null : r))
+		setReview((r) => (r?.pomo.id === pomo.id ? null : r))
 	}
 
 	const startTimer = (now: number) => {
@@ -314,16 +314,16 @@ function PomodancePage() {
 		sounds.click()
 		dispatch({ type: 'pause', now: Date.now() })
 	}
-	const switchTo = (next: Phase, autostart: boolean, s = settings) => {
+	const switchTo = (next: Phase, autostart: boolean, s = settings, ranOut = false) => {
 		const now = Date.now()
 		dispatch({ type: 'set', timer: timerAt(next, msFor(s, next), autostart, now) })
-		if (phase === 'work') closePomo(now)
+		if (phase === 'work') closePomo(now, ranOut)
 		if (next === 'work' && autostart) openPomo(now)
 	}
 
 	const finish = (autostart: boolean) => {
 		sounds.ring()
-		switchTo(otherPhase(phase), autostart)
+		switchTo(otherPhase(phase), autostart, settings, true)
 	}
 	const complete = () => finish(true)
 
@@ -384,7 +384,7 @@ function PomodancePage() {
 		if (next.phase === phase) sounds.click()
 		else {
 			sounds.ring()
-			if (next.phase === 'break') closePomo(now)
+			if (next.phase === 'break') closePomo(now, true)
 			else {
 				// the break ended a pomo this is taking back; anything else starts a new one
 				const last = lastUnreviewed(pomos, day)
@@ -494,7 +494,7 @@ function PomodancePage() {
 	}
 
 	const finishReview = (note: string, confirmed: boolean, clearIntention: boolean) => {
-		if (review) patchPomo(review.id, { note, confirmed })
+		if (review) patchPomo(review.pomo.id, { note, confirmed })
 		if (clearIntention) updateIntention('')
 		setReview(null)
 	}
@@ -743,9 +743,14 @@ function PomodancePage() {
 
 			{review && (
 				<ReviewDialog
-					pomo={review}
+					pomo={review.pomo}
+					ranOut={review.ranOut}
 					onDismiss={() =>
-						finishReview(review.note || review.intention, review.confirmed, false)
+						finishReview(
+							review.pomo.note || review.pomo.intention,
+							review.pomo.confirmed,
+							false
+						)
 					}
 					onSave={(note, clearIntention) => finishReview(note, true, clearIntention)}
 				/>
@@ -1335,10 +1340,12 @@ function Modal({
 
 function ReviewDialog({
 	pomo,
+	ranOut,
 	onDismiss,
 	onSave,
 }: {
 	pomo: Pomo
+	ranOut: boolean
 	onDismiss: () => void
 	onSave: (note: string, clearIntention: boolean) => void
 }) {
@@ -1353,7 +1360,8 @@ function ReviewDialog({
 				className="flex flex-col gap-4"
 			>
 				<h2 className="font-display text-2xl">
-					Pomo done: {minutesBetween(pomo.start, pomo.end!)}m, started {fmtTime(pomo.start)}
+					{ranOut ? 'Pomo done' : 'Pomo stopped'}: {minutesBetween(pomo.start, pomo.end!)}m,
+					started {fmtTime(pomo.start)}
 				</h2>
 				<p className="text-sm opacity-75">
 					{pomo.intention
