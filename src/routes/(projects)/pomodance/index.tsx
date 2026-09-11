@@ -632,13 +632,14 @@ function PomodancePage() {
 						</div>
 					)}
 
-					<section className="grid items-start gap-4 md:grid-cols-3">
+					<section className="flex flex-col gap-4">
 						{PHASES.map((p) => (
 							<PhaseVideo
 								key={p}
 								phase={p}
 								active={phase === p}
 								playing={phase === p && running}
+								onRequest={() => (running ? setConfirmSwitch(p) : switchTo(p, true))}
 								videos={settings.phases[p].videos}
 								index={trackIndex[p]}
 								startSeconds={seconds.current[p]}
@@ -1038,10 +1039,13 @@ function PhaseVideo({
 	onSelectTrack,
 	onReady,
 	onState,
+	onRequest,
 }: {
 	phase: Phase
 	active: boolean
 	playing: boolean
+	/** the off-phase strip asking to take over */
+	onRequest: () => void
 	videos: string[]
 	index: number
 	startSeconds: number
@@ -1067,20 +1071,33 @@ function PhaseVideo({
 
 	const remove = (i: number) => onPlaylistChange(videos.filter((_, n) => n !== i))
 
+	const count = videos.length > 1 ? ` · ${pos + 1}/${videos.length}` : ''
+
 	return (
 		<div
 			data-testid={`${phase}-video`}
 			className={cn(
-				'flex flex-col gap-2 transition-all',
-				active ? 'pomo-video-main md:col-span-2' : 'opacity-60 hover:opacity-100 md:col-span-1'
+				'relative flex flex-col gap-2',
+				active
+					? 'pomo-video-main order-first'
+					: 'pomo-video-next order-last gap-0 rounded-lg bg-white/6'
 			)}
 		>
-			<span className="font-ui text-xs tracking-wide uppercase opacity-70">
-				{PLAYLIST_HEADING[phase]}
-				{videos.length > 1 && ` · ${pos + 1}/${videos.length}`}
-				{active && ' · now playing'}
-			</span>
-			<div className="aspect-video w-full overflow-hidden rounded-lg bg-black/40">
+			{active && (
+				<span className="font-ui text-xs tracking-wide uppercase opacity-70">
+					{PLAYLIST_HEADING[phase]}
+					{count} · now playing
+				</span>
+			)}
+			{/* the player outlives the switch: parked out of sight rather than unmounted,
+			    so it keeps its place in the track and its API handle */}
+			<div
+				className={
+					active
+						? 'aspect-video w-full overflow-hidden rounded-lg bg-black/40'
+						: 'pomo-video-parked'
+				}
+			>
 				{videoId ? (
 					<VideoFrame
 						videoId={videoId}
@@ -1091,15 +1108,51 @@ function PhaseVideo({
 						onState={onState}
 					/>
 				) : (
-					<p className="p-4 text-sm opacity-70">
-						No videos yet. Paste a youtube link to give this half of the timer a soundtrack.
-					</p>
+					active && (
+						<p className="p-4 text-sm opacity-70">
+							No videos yet. Paste a youtube link to give this half of the timer a
+							soundtrack.
+						</p>
+					)
 				)}
 			</div>
 
+			{!active && (
+				<button
+					type="button"
+					data-testid={`${phase}-up-next`}
+					aria-label={`Switch to the ${PLAYLIST_HEADING[phase].toLowerCase()} now`}
+					onClick={onRequest}
+					className="pomo-up-next flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left"
+				>
+					{videoId ? (
+						<img
+							src={`https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`}
+							alt=""
+							className="aspect-video w-16 shrink-0 rounded bg-black/30 object-cover"
+						/>
+					) : (
+						<span className="aspect-video w-16 shrink-0 rounded bg-black/30" />
+					)}
+					<span className="flex min-w-0 flex-col">
+						<span className="font-ui text-[0.65rem] tracking-wide uppercase opacity-60">
+							Up next · {PLAYLIST_HEADING[phase]}
+							{count}
+						</span>
+						<span className="truncate text-sm">
+							{videoId ? titleOf(videoId) : 'No videos yet'}
+						</span>
+					</span>
+					<SkipForward className="ml-auto size-4 shrink-0 opacity-50" aria-hidden />
+				</button>
+			)}
+
 			<details
 				data-testid={`${phase}-playlist`}
-				className="font-ui text-sm opacity-80 open:opacity-100"
+				className={cn(
+					'font-ui text-sm open:opacity-100',
+					active ? 'opacity-80' : 'px-2 pb-1.5 opacity-70'
+				)}
 			>
 				<summary
 					id={`${phase}-playlist-toggle`}

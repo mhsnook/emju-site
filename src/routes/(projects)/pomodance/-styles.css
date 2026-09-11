@@ -61,8 +61,46 @@
 		-4px -4px 0 #2ec4b6;
 }
 
+.pomo-video-main {
+	animation: pomo-video-enter 500ms ease-out;
+}
+
 .pomo.is-break .pomo-video-main {
-	animation: pomo-tilt 1.2s ease-in-out infinite alternate;
+	animation:
+		pomo-video-enter 500ms ease-out,
+		pomo-tilt 1.2s ease-in-out 500ms infinite alternate;
+}
+
+/* The player for the other phase stays mounted but takes up no room: 1px and
+   invisible rather than display:none, which some browsers treat as a torn-down
+   iframe and forget the playback position. It regains its box before its
+   phase's play call, which happens in an effect after the render. */
+.pomo-video-parked {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	overflow: hidden;
+	opacity: 0;
+	pointer-events: none;
+}
+
+.pomo-video-next {
+	opacity: 0.55;
+	transition: opacity 300ms ease;
+}
+
+.pomo-video-next:hover,
+.pomo-video-next:focus-within {
+	opacity: 1;
+}
+
+.pomo-up-next {
+	transition: background 200ms ease;
+}
+
+.pomo-up-next:hover,
+.pomo-up-next:focus-visible {
+	background: rgb(255 255 255 / 0.14);
 }
 
 .pomo-dancers {
@@ -111,6 +149,17 @@
 	}
 }
 
+@keyframes pomo-video-enter {
+	from {
+		opacity: 0;
+		transform: translateY(16px) scale(0.97);
+	}
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
 @keyframes pomo-tilt {
 	from {
 		transform: rotate(-1.5deg) translateY(-4px);
@@ -153,7 +202,10 @@
 	text-shadow: none;
 }
 
-.pomo.is-break.is-calm .pomo-video-main,
+.pomo.is-break.is-calm .pomo-video-main {
+	animation: pomo-video-enter 500ms ease-out;
+}
+
 .pomo.is-calm .pomo-dancers span {
 	animation: none;
 }
@@ -161,7 +213,7 @@
 @media (prefers-reduced-motion: reduce) {
 	.pomo.is-break::before,
 	.pomo.is-break .pomo-clock,
-	.pomo.is-break .pomo-video-main,
+	.pomo-video-main,
 	.pomo-dancers span {
 		animation: none;
 	}
