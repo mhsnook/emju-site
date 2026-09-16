@@ -32,12 +32,12 @@ jobs:
          # The default pull_request checkout is the merge ref, which is what the
          # merge button would produce. `HEAD` being the merge commit is also what
          # makes the two-dot diff below the pull request's own footprint.
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@v7
            with:
               path: tree
               fetch-depth: 0
 
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@v7
            with:
               ref: ${{ github.event.pull_request.head.sha }}
               path: ci-head
@@ -55,13 +55,13 @@ jobs:
               git diff --name-only "$BASE_SHA..HEAD" > ../touched.txt
               wc -l < ../touched.txt
 
-         - uses: pnpm/action-setup@v4
+         - uses: pnpm/action-setup@v6
            with:
               # Head's pin, read from head's own package.json. Pinning the version a
               # second time here is how the two pins drift apart.
               package_json_file: ci-head/package.json
 
-         - uses: actions/setup-node@v4
+         - uses: actions/setup-node@v7
            with:
               # The base branch does not carry this file, so both jobs read head's.
               node-version-file: ci-head/.node-version
@@ -79,7 +79,7 @@ jobs:
               --sha ${{ github.event.pull_request.head.sha }}
               --touched touched.txt --out head.json
 
-         - uses: actions/upload-artifact@v4
+         - uses: actions/upload-artifact@v7
            with:
               name: measurement-head
               path: head.json
@@ -89,7 +89,7 @@ jobs:
       name: Measure the base branch
       runs-on: ubuntu-latest
       steps:
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@v7
            with:
               ref: ${{ github.event.pull_request.base.sha }}
               path: tree
@@ -103,7 +103,7 @@ jobs:
          #
          # `ci-head` is a sibling of `tree`, not a directory inside it, so no
          # ignore rule has to keep the measured tree from walking into it.
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@v7
            with:
               ref: ${{ github.event.pull_request.head.sha }}
               path: ci-head
@@ -114,7 +114,7 @@ jobs:
          # cache it reinstalls and rebuilds on every push for the life of the pull
          # request.
          - id: cached
-           uses: actions/cache@v4
+           uses: actions/cache@v6
            with:
               path: base.json
               key: >-
@@ -123,12 +123,12 @@ jobs:
                  'ci-head/.oxfmtrc.json', 'ci-head/.gitignore', 'ci-head/.node-version',
                  'ci-head/package.json') }}
 
-         - uses: pnpm/action-setup@v4
+         - uses: pnpm/action-setup@v6
            if: steps.cached.outputs.cache-hit != 'true'
            with:
               package_json_file: ci-head/package.json
 
-         - uses: actions/setup-node@v4
+         - uses: actions/setup-node@v7
            if: steps.cached.outputs.cache-hit != 'true'
            with:
               node-version-file: ci-head/.node-version
@@ -148,7 +148,7 @@ jobs:
               --sha ${{ github.event.pull_request.base.sha }}
               --out base.json
 
-         - uses: actions/upload-artifact@v4
+         - uses: actions/upload-artifact@v7
            with:
               name: measurement-base
               path: base.json
@@ -162,17 +162,17 @@ jobs:
       if: always()
       needs: [head, base]
       steps:
-         - uses: actions/checkout@v4
+         - uses: actions/checkout@v7
            with:
               ref: ${{ github.event.pull_request.head.sha }}
               path: ci-head
               sparse-checkout: ci
 
-         - uses: actions/setup-node@v4
+         - uses: actions/setup-node@v7
            with:
               node-version-file: ci-head/.node-version
 
-         - uses: actions/download-artifact@v4
+         - uses: actions/download-artifact@v8
            # A job that died uploads nothing, and the report says so.
            continue-on-error: true
            with:
