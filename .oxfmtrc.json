@@ -16,6 +16,8 @@
 		"worker-configuration.d.ts",
 		"src/routeTree.gen.ts",
 		"drizzle/**",
-		"scenetest/.reports/**"
+		"scenetest/.reports/**",
+		".ci-head/**",
+		".ci-out/**"
 	]
 }

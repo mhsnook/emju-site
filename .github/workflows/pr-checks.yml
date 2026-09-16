@@ -1,0 +1,153 @@
+name: PR checks
+
+on:
+   pull_request:
+
+permissions:
+   contents: read
+   pull-requests: write
+
+concurrency:
+   group: pr-checks-${{ github.event.pull_request.number }}
+   cancel-in-progress: true
+
+defaults:
+   run:
+      # Set once here rather than per step: without pipefail a pipeline exits with its last
+      # command's status, so a failing tool upstream of a pipe reads as a success.
+      shell: bash -euo pipefail {0}
+
+jobs:
+   head:
+      name: Measure this PR
+      runs-on: ubuntu-latest
+      steps:
+         # The default pull_request checkout is the merge ref, which is what makes a two-dot
+         # diff against the base SHA the PR's own footprint. Full history, because that diff
+         # needs the base commit.
+         - uses: actions/checkout@v5
+           with:
+              fetch-depth: 0
+
+         - uses: pnpm/action-setup@v4
+         - uses: actions/setup-node@v5
+           with:
+              node-version-file: .nvmrc
+              cache: pnpm
+
+         - run: pnpm install --frozen-lockfile
+
+         - name: Measure
+           env:
+              BASE_SHA: ${{ github.event.pull_request.base.sha }}
+              MEASURED_SHA: ${{ github.event.pull_request.head.sha }}
+           run: node ci/measure.ts --tree head --out .ci-out/head.json
+
+         - uses: actions/upload-artifact@v4
+           with:
+              name: measurement-head
+              path: .ci-out/head.json
+              if-no-files-found: error
+
+   base:
+      name: Measure the base branch
+      runs-on: ubuntu-latest
+      steps:
+         - uses: actions/checkout@v5
+           with:
+              ref: ${{ github.event.pull_request.base.sha }}
+
+         # Head's measuring tools measure both trees. Cone-mode sparse checkout always
+         # includes the repository root, so head's judgment configs arrive with ci/ without
+         # being named. The scripts stay outside the measured tree, so their own issues still
+         # diff like any other file's.
+         - uses: actions/checkout@v5
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              path: .ci-head
+              sparse-checkout: ci
+
+         - name: Cache this base measurement
+           id: cache
+           uses: actions/cache@v4
+           with:
+              path: .ci-out/base.json
+              # The base measurement is a function of the base SHA and head's instrument, and
+              # neither changes when someone pushes another commit to the PR.
+              key: base-measurement-${{ github.event.pull_request.base.sha }}-${{ hashFiles('.ci-head/ci/*.ts', '.ci-head/tsconfig.json', '.ci-head/.oxlintrc.json', '.ci-head/.oxfmtrc.json', '.ci-head/.gitignore') }}
+
+         - name: Judge the base tree by head's configs
+           if: steps.cache.outputs.cache-hit != 'true'
+           # These decide what counts as an issue, so both trees read head's copy: a PR that
+           # turns on a rule would otherwise have its base tree judged by the old rule. The
+           # build configs (vite.config.ts, wrangler.jsonc) stay each tree's own, because a
+           # build-config change is exactly what the bundle delta exists to show.
+           # .gitignore travels with them, so the base tree's tools skip .ci-head/ — a path
+           # the base branch has never heard of.
+           run: cp .ci-head/tsconfig.json .ci-head/.oxlintrc.json .ci-head/.oxfmtrc.json .ci-head/.gitignore .
+
+         - uses: pnpm/action-setup@v4
+           if: steps.cache.outputs.cache-hit != 'true'
+         - uses: actions/setup-node@v5
+           if: steps.cache.outputs.cache-hit != 'true'
+           with:
+              # Head's .nvmrc, because the base branch may not have one yet.
+              node-version-file: .ci-head/.nvmrc
+              cache: pnpm
+
+         # Each tree installs from its own lockfile, so a PR that bumps a linter measures with
+         # two versions of it. Pinning base to head's dependencies would void the lockfile.
+         - run: pnpm install --frozen-lockfile
+           if: steps.cache.outputs.cache-hit != 'true'
+
+         - name: Measure
+           if: steps.cache.outputs.cache-hit != 'true'
+           env:
+              MEASURED_SHA: ${{ github.event.pull_request.base.sha }}
+           run: node .ci-head/ci/measure.ts --tree base --out .ci-out/base.json
+
+         - uses: actions/upload-artifact@v4
+           with:
+              name: measurement-base
+              path: .ci-out/base.json
+              if-no-files-found: error
+
+   report:
+      name: Report
+      runs-on: ubuntu-latest
+      needs: [head, base]
+      # Run even when a measuring job died: a missing measurement is the thing this report
+      # must say out loud.
+      if: always()
+      steps:
+         - uses: actions/checkout@v5
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              sparse-checkout: ci
+
+         - uses: actions/setup-node@v5
+           with:
+              node-version-file: .nvmrc
+              # This job installs nothing, and the default cache setup looks for pnpm on
+              # PATH because the root package.json arrived with the sparse checkout.
+              package-manager-cache: false
+
+         # No install: the report reads two JSON files and talks to the GitHub API.
+         - uses: actions/download-artifact@v4
+           continue-on-error: true
+           with:
+              name: measurement-head
+              path: .ci-out
+
+         - uses: actions/download-artifact@v4
+           continue-on-error: true
+           with:
+              name: measurement-base
+              path: .ci-out
+
+         - name: Post the report and gate
+           env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+              BASE_REF: ${{ github.event.pull_request.base.ref }}
+           run: node ci/report.ts --head .ci-out/head.json --base .ci-out/base.json

@@ -19,3 +19,7 @@ worker-configuration.d.ts
 # scenetest run reports
 scenetest/.reports
 scenetest-reports
+
+# Sibling checkout of the head commit, and the CI measurement files it writes.
+.ci-head
+.ci-out

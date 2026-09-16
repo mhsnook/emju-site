@@ -18,6 +18,8 @@
 		".output",
 		".wrangler",
 		"scenetest-reports",
-		"worker-configuration.d.ts"
+		"worker-configuration.d.ts",
+		".ci-head",
+		".ci-out"
 	]
 }
