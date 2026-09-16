@@ -49,6 +49,24 @@ Bindings and non-secret vars are in [`wrangler.jsonc`](wrangler.jsonc); secrets 
 | `CONTACT_FROM_EMAIL`                          | var          | "From" address — must be on an Email-Routing-enabled domain          |
 | `TURNSTILE_SITE_KEY` / `TURNSTILE_SECRET_KEY` | var / secret | Turnstile keys (fall back to test keys)                              |
 
+## PR checks
+
+Every pull request gets one comment that reports what it _changed_, rather than whether the
+repository is clean: new and resolved type errors, new and resolved lint issues, formatter
+drift in the files it touched, client and Worker bundle size, and the test result. The
+comment updates in place on every push.
+
+The workflow is [`.github/workflows/pr-checks.yml`](.github/workflows/pr-checks.yml) and the
+code it runs is in [`ci/`](ci). One job measures this branch, one measures the base branch,
+and a third diffs the two and decides the verdict. Both jobs run the _same_ copy of `ci/`,
+checked out from the pull request's head — otherwise a pull request that edits a check
+script would change what the script measures. `ci/lib` is pure and its tests run in the
+normal `pnpm test` suite.
+
+What blocks a merge: new type errors, new lint errors, an unformatted file the pull request
+touched, a failing test, a failed `wrangler deploy --dry-run`, and any check that produced no
+measurement. Bundle sizes report without blocking.
+
 ## Deploy
 
 ```bash

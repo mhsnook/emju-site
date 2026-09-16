@@ -1,0 +1,189 @@
+name: PR checks
+
+# Measures the pull request's tree and the base branch's tree with the same
+# instrument, then reports what changed between them in one comment.
+#
+# The two measuring jobs run in parallel, so the wall clock is roughly the
+# slower of the two. Each one installs once and builds once, whatever the number
+# of checks it then answers.
+
+on:
+   pull_request:
+
+concurrency:
+   group: pr-checks-${{ github.event.pull_request.number }}
+   cancel-in-progress: true
+
+permissions:
+   contents: read
+   pull-requests: write
+
+defaults:
+   run:
+      # A pipeline exits with its last command's status, so `bash -e` alone lets a
+      # failure upstream of a pipe pass as a success. Set it once, here.
+      shell: bash -euo pipefail {0}
+
+jobs:
+   head:
+      name: Measure this branch
+      runs-on: ubuntu-latest
+      steps:
+         # The default pull_request checkout is the merge ref, which is what the
+         # merge button would produce. `HEAD` being the merge commit is also what
+         # makes the two-dot diff below the pull request's own footprint.
+         - uses: actions/checkout@v7
+           with:
+              path: tree
+              fetch-depth: 0
+
+         - uses: actions/checkout@v7
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              path: ci-head
+              sparse-checkout: ci
+
+         - name: List the files this pull request touches
+           working-directory: tree
+           env:
+              BASE_SHA: ${{ github.event.pull_request.base.sha }}
+           run: |
+              # Two dots, not three. HEAD is the merge ref, so `BASE..HEAD` is this
+              # pull request's own footprint. Three dots, or a checkout of the head
+              # SHA, would widen it to every file that landed on the base branch
+              # since the author started.
+              git diff --name-only "$BASE_SHA..HEAD" > ../touched.txt
+              wc -l < ../touched.txt
+
+         - uses: pnpm/action-setup@v6
+           with:
+              # Head's pin, read from head's own package.json. Pinning the version a
+              # second time here is how the two pins drift apart.
+              package_json_file: ci-head/package.json
+
+         - uses: actions/setup-node@v7
+           with:
+              # The base branch does not carry this file, so both jobs read head's.
+              node-version-file: ci-head/.node-version
+              cache: pnpm
+              cache-dependency-path: tree/pnpm-lock.yaml
+
+         - name: Install
+           working-directory: tree
+           run: pnpm install --frozen-lockfile
+
+         - name: Measure
+           run: >
+              node ci-head/ci/measure.ts
+              --tree tree --instrument ci-head --label head
+              --sha ${{ github.event.pull_request.head.sha }}
+              --touched touched.txt --out head.json
+
+         - uses: actions/upload-artifact@v7
+           with:
+              name: measurement-head
+              path: head.json
+              if-no-files-found: error
+
+   base:
+      name: Measure the base branch
+      runs-on: ubuntu-latest
+      steps:
+         - uses: actions/checkout@v7
+           with:
+              ref: ${{ github.event.pull_request.base.sha }}
+              path: tree
+
+         # Head's measuring tools measure both trees. If each tree used its own
+         # copy, a pull request that edits a check script would change what the
+         # script measures, and that change would read as a change in the codebase.
+         #
+         # Cone-mode sparse checkout always includes the repository root, so head's
+         # root configs arrive here without anyone maintaining a list of them.
+         #
+         # `ci-head` is a sibling of `tree`, not a directory inside it, so no
+         # ignore rule has to keep the measured tree from walking into it.
+         - uses: actions/checkout@v7
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              path: ci-head
+              sparse-checkout: ci
+
+         # This job's answer depends on the base SHA and on head's instrument, and
+         # neither changes when the author pushes another commit. Without the
+         # cache it reinstalls and rebuilds on every push for the life of the pull
+         # request.
+         - id: cached
+           uses: actions/cache@v6
+           with:
+              path: base.json
+              key: >-
+                 base-measurement-v1-${{ github.event.pull_request.base.sha }}-${{
+                 hashFiles('ci-head/ci/**', 'ci-head/tsconfig.json', 'ci-head/.oxlintrc.json',
+                 'ci-head/.oxfmtrc.json', 'ci-head/.gitignore', 'ci-head/.node-version',
+                 'ci-head/package.json') }}
+
+         - uses: pnpm/action-setup@v6
+           if: steps.cached.outputs.cache-hit != 'true'
+           with:
+              package_json_file: ci-head/package.json
+
+         - uses: actions/setup-node@v7
+           if: steps.cached.outputs.cache-hit != 'true'
+           with:
+              node-version-file: ci-head/.node-version
+              cache: pnpm
+              cache-dependency-path: tree/pnpm-lock.yaml
+
+         - name: Install
+           if: steps.cached.outputs.cache-hit != 'true'
+           working-directory: tree
+           run: pnpm install --frozen-lockfile
+
+         - name: Measure
+           if: steps.cached.outputs.cache-hit != 'true'
+           run: >
+              node ci-head/ci/measure.ts
+              --tree tree --instrument ci-head --label base
+              --sha ${{ github.event.pull_request.base.sha }}
+              --out base.json
+
+         - uses: actions/upload-artifact@v7
+           with:
+              name: measurement-base
+              path: base.json
+              if-no-files-found: error
+
+   report:
+      name: Report
+      runs-on: ubuntu-latest
+      # `always()` so that a measuring job which died still produces a comment
+      # saying the tree went unmeasured, rather than no comment at all.
+      if: always()
+      needs: [head, base]
+      steps:
+         - uses: actions/checkout@v7
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              path: ci-head
+              sparse-checkout: ci
+
+         - uses: actions/setup-node@v7
+           with:
+              node-version-file: ci-head/.node-version
+
+         - uses: actions/download-artifact@v8
+           # A job that died uploads nothing, and the report says so.
+           continue-on-error: true
+           with:
+              pattern: measurement-*
+              merge-multiple: true
+
+         # The comment goes up first and the verdict comes after, so a red run
+         # explains which check failed instead of leaving the author to guess.
+         - name: Post the comment, then decide
+           env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+              BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+           run: node ci-head/ci/report.ts head.json base.json
