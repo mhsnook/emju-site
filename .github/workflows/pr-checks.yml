@@ -1,0 +1,119 @@
+name: PR checks
+
+on:
+   pull_request:
+      branches: [main]
+
+permissions:
+   contents: read
+   pull-requests: write
+
+concurrency:
+   group: pr-checks-${{ github.event.pull_request.number }}
+   cancel-in-progress: true
+
+defaults:
+   run:
+      # `pipefail` is off by default, so a piped step reports the last command's
+      # status and a failed build records as a success. Set it once, here.
+      shell: bash -euo pipefail {0}
+
+jobs:
+   measure:
+      name: Measure ${{ matrix.tree }}
+      runs-on: ubuntu-latest
+      strategy:
+         fail-fast: false
+         matrix:
+            tree: [head, base]
+      steps:
+         - name: Check out the tree being measured
+           uses: actions/checkout@v4
+           with:
+              ref: >-
+                 ${{ matrix.tree == 'head' && github.event.pull_request.head.sha
+                 || github.event.pull_request.base.sha }}
+              path: tree
+              # The head job needs the merge base to list the PR's own files. The
+              # numbers are quoted because an unquoted 0 is falsy in a GitHub
+              # expression, so `&& 0 || 1` would hand every tree a depth of 1.
+              fetch-depth: ${{ matrix.tree == 'head' && '0' || '1' }}
+
+         # Head's tooling measures both trees. Without this, a PR that edits a
+         # check script would read as a change in the codebase, and the base
+         # branch — which has never seen these files — could not be measured at
+         # all. The checkout is a sibling of the measured tree, not inside it, so
+         # it is invisible to every tool that walks the tree.
+         - name: Check out head's measuring tools
+           uses: actions/checkout@v4
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              path: ci-head
+              sparse-checkout: .github/ci
+
+         # Judgment configs decide what counts as an issue, so both trees are
+         # judged by head's copy. Build configs (vite.config.ts, wrangler.jsonc)
+         # stay each tree's own: a build-config change is a real change, and it is
+         # what the bundle delta exists to show.
+         - name: Judge both trees by head's rules
+           run: cp ci-head/.oxlintrc.json ci-head/.oxfmtrc.json ci-head/tsconfig.json tree/
+
+         - uses: actions/setup-node@v4
+           with:
+              node-version-file: ci-head/.nvmrc
+
+         # No version here: pnpm's own version is pinned by the `packageManager`
+         # field, and naming it twice is how this breaks on the next bump. The
+         # file has to be named, because the tree sits one level down.
+         - uses: pnpm/action-setup@v4
+           with:
+              package_json_file: tree/package.json
+
+         - name: Install
+           working-directory: tree
+           run: pnpm install --frozen-lockfile
+
+         - name: Measure
+           working-directory: tree
+           env:
+              BASE_SHA: ${{ github.event.pull_request.base.sha }}
+           run: node ../ci-head/.github/ci/measure.ts ${{ matrix.tree }} ../measurements/${{ matrix.tree }}.json
+
+         - uses: actions/upload-artifact@v4
+           with:
+              name: measurement-${{ matrix.tree }}
+              path: measurements/${{ matrix.tree }}.json
+              if-no-files-found: error
+
+   report:
+      name: Report
+      runs-on: ubuntu-latest
+      needs: measure
+      # A tree whose job died still has to be reported, as a blocked check rather
+      # than as silence.
+      if: always()
+      steps:
+         - uses: actions/checkout@v4
+           with:
+              ref: ${{ github.event.pull_request.head.sha }}
+              sparse-checkout: .github/ci
+
+         - uses: actions/setup-node@v4
+           with:
+              node-version-file: .nvmrc
+
+         - uses: actions/download-artifact@v4
+           with:
+              path: measurements
+              pattern: measurement-*
+              merge-multiple: true
+           continue-on-error: true
+
+         # Posts the comment, then gates. A contributor who cannot see why a run
+         # failed will guess.
+         - name: Report and gate
+           env:
+              GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              PR_NUMBER: ${{ github.event.pull_request.number }}
+              BASE_REF: ${{ github.event.pull_request.base.ref }}
+           run: node .github/ci/report.ts

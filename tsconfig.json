@@ -1,5 +1,7 @@
 {
-	"include": ["**/*.ts", "**/*.tsx"],
+	// `**/*` skips dot-directories, so the CI scripts are named explicitly:
+	// without this line they are the one part of the tree nothing typechecks.
+	"include": ["**/*.ts", "**/*.tsx", ".github/ci/**/*.ts"],
 	"compilerOptions": {
 		"target": "ES2022",
 		"jsx": "react-jsx",

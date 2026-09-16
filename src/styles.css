@@ -1,7 +1,11 @@
 /* Self-hosted fonts (bundled by Vite — no external requests at runtime). */
 @import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 
-@import 'tailwindcss';
+/* Scan only the app's own source. Tailwind's automatic detection walks the
+   whole repository, so class-like strings in CI scripts and config would ship
+   as real CSS to every visitor. */
+@import 'tailwindcss' source(none);
+@source '../src';
 
 @plugin '@tailwindcss/typography';
 
