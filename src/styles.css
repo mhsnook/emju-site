@@ -1,7 +1,7 @@
 /* Self-hosted fonts (bundled by Vite — no external requests at runtime). */
 @import '@fontsource-variable/atkinson-hyperlegible-next/wght.css';
 
-@import 'tailwindcss';
+@import 'tailwindcss' source('.');
 
 @plugin '@tailwindcss/typography';
 
